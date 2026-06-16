@@ -380,6 +380,29 @@ On failure the document carries `ok: false`, a human `error`, and a **stable `co
 (`missing_args`, `dirty_worktree`, `ci_failing`, `not_a_repo`, `unborn_no_commits`, …) so an
 agent can branch on the code instead of parsing prose.
 
+### Zero-config agent mode
+
+You don't have to repeat the flags. tbdflow resolves each global flag with this precedence:
+
+```
+explicit CLI flag  >  TBDFLOW_* env var  >  CLAUDECODE/CI auto-detect  >  built-in default
+```
+
+- **Auto-detect:** non-interactive mode turns on automatically when `CLAUDECODE` (set by
+  Claude Code) or `CI` is present — so agents never hang on a prompt, no flags required.
+- **Env vars:** set `TBDFLOW_NON_INTERACTIVE`, `TBDFLOW_TOON`, or `TBDFLOW_NO_SIGN` once and
+  every call inherits them. This repo ships them in `.claude/settings.json`, so inside Claude
+  Code a bare `tbdflow <command>` already runs non-interactive + TOON.
+- **Verify:** `tbdflow doctor` reports the resolved `defaults` and where non-interactive came
+  from (`defaults.non_interactive_source`).
+
+```jsonc
+// .claude/settings.json
+{
+  "env": { "TBDFLOW_NON_INTERACTIVE": "1", "TBDFLOW_TOON": "1" }
+}
+```
+
 ### Situational awareness in one call
 
 `tbdflow context` collapses status + sync-state + radar + branch info into a single TOON

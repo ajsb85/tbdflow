@@ -198,6 +198,20 @@ pub fn handle_doctor(opts: RunOpts, config: &config::Config) -> Result<()> {
         crate::say!("  [{}] {}: {}", mark, c.name.bold(), c.detail.dimmed());
     }
 
+    // Resolved agent-mode defaults (so an agent can confirm it's configured).
+    let ni_source = crate::runtime::non_interactive_source();
+    crate::say!(
+        "\n{} non-interactive={} toon={} no-sign={}{}",
+        "Agent defaults:".bold(),
+        opts.non_interactive,
+        opts.toon,
+        opts.no_sign,
+        match ni_source {
+            Some(s) => format!(" (non-interactive via {})", s),
+            None => String::new(),
+        }
+    );
+
     let all_ok = checks.iter().all(|c| c.ok);
     if all_ok {
         crate::say!("{}", "\nEnvironment looks healthy.".green());
@@ -207,6 +221,21 @@ pub fn handle_doctor(opts: RunOpts, config: &config::Config) -> Result<()> {
 
     report::result(Toon::obj(vec![
         ("healthy", Toon::Bool(all_ok)),
+        (
+            "defaults",
+            Toon::obj(vec![
+                ("non_interactive", Toon::Bool(opts.non_interactive)),
+                ("toon", Toon::Bool(opts.toon)),
+                ("no_sign", Toon::Bool(opts.no_sign)),
+                (
+                    "non_interactive_source",
+                    match ni_source {
+                        Some(s) => Toon::str(s),
+                        None => Toon::Null,
+                    },
+                ),
+            ]),
+        ),
         (
             "checks",
             Toon::Arr(

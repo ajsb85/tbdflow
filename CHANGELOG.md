@@ -1,3 +1,14 @@
+# [0.32.0](https://github.com/ajsb85/tbdflow/releases/tag/v0.32.0) (2026-06-16)
+
+### ✨ Features
+- **(agents):** resolve agent-mode defaults from the environment so Claude Code/CI need not
+  repeat flags. Precedence: explicit flag > `TBDFLOW_*` env (`TBDFLOW_NON_INTERACTIVE`,
+  `TBDFLOW_TOON`, `TBDFLOW_NO_SIGN`) > `CLAUDECODE`/`CI` auto-detect (enables non-interactive) >
+  built-in default. `tbdflow doctor` now reports the resolved `defaults` and
+  `non_interactive_source`. Ships `TBDFLOW_*` env in `.claude/settings.json` so a bare
+  `tbdflow <command>` runs non-interactive + TOON inside Claude Code.
+
+
 # [0.31.0](https://github.com/ajsb85/tbdflow/releases/tag/v0.31.0) (2026-06-16)
 
 ### ✨ Features

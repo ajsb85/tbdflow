@@ -12,5 +12,6 @@ pub mod intent;
 pub mod radar;
 pub mod recover;
 pub mod review;
+pub mod runtime;
 pub mod toon;
 pub mod wizard;

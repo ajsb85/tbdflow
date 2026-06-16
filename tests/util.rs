@@ -2,6 +2,20 @@ use std::fs::write;
 use std::process::Command;
 use tempfile::{tempdir, TempDir};
 
+/// An `assert_cmd` invocation of the tbdflow binary with agent-mode env vars
+/// stripped, so tests are hermetic regardless of whether they run inside Claude
+/// Code / CI (which would otherwise auto-enable non-interactive/TOON).
+#[allow(dead_code)]
+pub fn tbdflow_cmd() -> assert_cmd::Command {
+    let mut cmd = assert_cmd::Command::cargo_bin("tbdflow").unwrap();
+    cmd.env_remove("CLAUDECODE")
+        .env_remove("CI")
+        .env_remove("TBDFLOW_TOON")
+        .env_remove("TBDFLOW_NON_INTERACTIVE")
+        .env_remove("TBDFLOW_NO_SIGN");
+    cmd
+}
+
 /// Sets up a temporary Git repository for testing purposes.
 pub fn setup_temp_git_repo() -> (TempDir, TempDir, std::path::PathBuf) {
     let dir = tempdir().expect("create temp dir");

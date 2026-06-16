@@ -16,7 +16,7 @@ fn test_status_command() {
     let (_dir, _bare_dir, repo_path) = setup_temp_git_repo();
     std::env::set_current_dir(&repo_path).unwrap();
 
-    let mut cmd = Command::cargo_bin("tbdflow").unwrap();
+    let mut cmd = util::tbdflow_cmd();
     cmd.arg("--verbose").arg("status");
     cmd.assert().success().stdout(contains("Checking status"));
 }
@@ -27,7 +27,7 @@ fn test_status_command() {
 fn test_current_branch_command() {
     let (_dir, _bare_dir, repo_path) = setup_temp_git_repo();
     std::env::set_current_dir(&repo_path).unwrap();
-    let mut cmd = Command::cargo_bin("tbdflow").unwrap();
+    let mut cmd = util::tbdflow_cmd();
     cmd.arg("current-branch");
     cmd.assert()
         .success()
@@ -73,7 +73,7 @@ automatic_tags:
         .unwrap();
 
     // Test creating a branch WITH an issue ID
-    let mut cmd_with_issue = Command::cargo_bin("tbdflow").unwrap();
+    let mut cmd_with_issue = util::tbdflow_cmd();
     cmd_with_issue
         .arg("branch")
         .arg("--type")
@@ -123,7 +123,7 @@ automatic_tags:
         .unwrap();
 
     // Test creating a branch WITHOUT an issue ID in the name
-    let mut cmd_without_issue = Command::cargo_bin("tbdflow").unwrap();
+    let mut cmd_without_issue = util::tbdflow_cmd();
     cmd_without_issue
         .arg("branch")
         .arg("--type")
@@ -145,7 +145,7 @@ automatic_tags:
 fn test_create_feature_branch_command() {
     let (_dir, _bare_dir, repo_path) = setup_temp_git_repo();
     std::env::set_current_dir(&repo_path).unwrap();
-    let mut cmd = Command::cargo_bin("tbdflow").unwrap();
+    let mut cmd = util::tbdflow_cmd();
     cmd.arg("branch")
         .arg("--type")
         .arg("feature")
@@ -162,7 +162,7 @@ fn test_create_feature_branch_command() {
 fn test_create_release_branch_command() {
     let (_dir, _bare_dir, repo_path) = setup_temp_git_repo();
     std::env::set_current_dir(&repo_path).unwrap();
-    let mut cmd = Command::cargo_bin("tbdflow").unwrap();
+    let mut cmd = util::tbdflow_cmd();
     cmd.arg("branch")
         .arg("--type")
         .arg("release")
@@ -206,7 +206,7 @@ fn test_commit_command() {
         retries -= 1;
     }
 
-    let mut cmd = Command::cargo_bin("tbdflow").unwrap();
+    let mut cmd = util::tbdflow_cmd();
     // Run the commit command with a feature type, scope, message, and breaking change flag
     cmd.arg("commit")
         .arg("--type")
@@ -255,7 +255,7 @@ fn test_complete_feature_branch_command() {
     std::env::set_current_dir(&repo_path).unwrap();
 
     // Create the feature branch first
-    let mut create_cmd = Command::cargo_bin("tbdflow").unwrap();
+    let mut create_cmd = util::tbdflow_cmd();
     create_cmd
         .arg("branch")
         .arg("--type")
@@ -264,7 +264,7 @@ fn test_complete_feature_branch_command() {
         .arg("new-feature");
     create_cmd.assert().success();
 
-    let mut cmd = Command::cargo_bin("tbdflow").unwrap();
+    let mut cmd = util::tbdflow_cmd();
     cmd.arg("complete")
         .arg("--type")
         .arg("feature")
@@ -283,7 +283,7 @@ fn test_complete_release_branch_command() {
     std::env::set_current_dir(&repo_path).unwrap();
 
     // Create the release branch first
-    let mut create_cmd = Command::cargo_bin("tbdflow").unwrap();
+    let mut create_cmd = util::tbdflow_cmd();
     create_cmd
         .arg("branch")
         .arg("--type")
@@ -305,7 +305,7 @@ fn test_complete_release_branch_command() {
         branches
     );
 
-    let mut cmd = Command::cargo_bin("tbdflow").unwrap();
+    let mut cmd = util::tbdflow_cmd();
     cmd.arg("--verbose")
         .arg("complete")
         .arg("--type")
@@ -377,7 +377,7 @@ fn test_sync_command() {
 
     // Now run the sync command
     std::env::set_current_dir(&repo_path).unwrap();
-    let mut cmd = Command::cargo_bin("tbdflow").unwrap();
+    let mut cmd = util::tbdflow_cmd();
     cmd.arg("sync");
     cmd.assert()
         .success()
@@ -410,11 +410,7 @@ fn test_undo_command() {
         .unwrap();
 
     // Grab the SHA of the commit we just made using tbdflow head-sha
-    let sha_output = Command::cargo_bin("tbdflow")
-        .unwrap()
-        .arg("head-sha")
-        .output()
-        .unwrap();
+    let sha_output = util::tbdflow_cmd().arg("head-sha").output().unwrap();
     let sha = String::from_utf8_lossy(&sha_output.stdout)
         .trim()
         .to_string();
@@ -423,7 +419,7 @@ fn test_undo_command() {
     assert!(repo_path.join("BAD_CHANGE.md").exists());
 
     // Run the undo command
-    let mut cmd = Command::cargo_bin("tbdflow").unwrap();
+    let mut cmd = util::tbdflow_cmd();
     cmd.arg("undo").arg(&sha);
     cmd.assert()
         .success()
@@ -461,16 +457,12 @@ fn test_undo_no_push_command() {
         .output()
         .unwrap();
 
-    let sha_output = Command::cargo_bin("tbdflow")
-        .unwrap()
-        .arg("head-sha")
-        .output()
-        .unwrap();
+    let sha_output = util::tbdflow_cmd().arg("head-sha").output().unwrap();
     let sha = String::from_utf8_lossy(&sha_output.stdout)
         .trim()
         .to_string();
 
-    let mut cmd = Command::cargo_bin("tbdflow").unwrap();
+    let mut cmd = util::tbdflow_cmd();
     cmd.arg("undo").arg(&sha).arg("--no-push");
     cmd.assert()
         .success()
@@ -486,7 +478,7 @@ fn test_undo_nonexistent_sha() {
     let (_dir, _bare_dir, repo_path) = setup_temp_git_repo();
     std::env::set_current_dir(&repo_path).unwrap();
 
-    let mut cmd = Command::cargo_bin("tbdflow").unwrap();
+    let mut cmd = util::tbdflow_cmd();
     cmd.arg("undo").arg("deadbeefdeadbeef");
     cmd.assert().failure();
 }
@@ -499,7 +491,7 @@ fn test_check_branches_command() {
     std::env::set_current_dir(&repo_path).unwrap();
 
     // Create a feature branch that is stale
-    let mut create_cmd = Command::cargo_bin("tbdflow").unwrap();
+    let mut create_cmd = util::tbdflow_cmd();
     create_cmd
         .arg("branch")
         .arg("--type")
@@ -523,7 +515,7 @@ fn test_check_branches_command() {
         .output()
         .unwrap();
 
-    let mut cmd = Command::cargo_bin("tbdflow").unwrap();
+    let mut cmd = util::tbdflow_cmd();
     cmd.arg("check-branches");
     cmd.assert()
         .success()
@@ -548,7 +540,7 @@ automatic_tags:
 "#;
     std::fs::write(repo_path.join(".tbdflow.yml"), config_content).unwrap();
 
-    let mut cmd = Command::cargo_bin("tbdflow").unwrap();
+    let mut cmd = util::tbdflow_cmd();
     cmd.arg("radar");
     cmd.assert().success().stdout(contains("Radar is disabled"));
 }
@@ -592,7 +584,7 @@ automatic_tags:
     // Modify an existing tracked file so radar has local changes to scan
     std::fs::write(repo_path.join("README.md"), "modified locally").unwrap();
 
-    let mut cmd = Command::cargo_bin("tbdflow").unwrap();
+    let mut cmd = util::tbdflow_cmd();
     cmd.arg("radar");
     cmd.assert()
         .success()
@@ -607,7 +599,7 @@ fn test_non_interactive_commit_requires_args() {
     let (_dir, _bare_dir, repo_path) = setup_temp_git_repo();
     std::env::set_current_dir(&repo_path).unwrap();
 
-    let mut cmd = Command::cargo_bin("tbdflow").unwrap();
+    let mut cmd = util::tbdflow_cmd();
     cmd.arg("--non-interactive").arg("commit");
     cmd.assert()
         .failure()
@@ -621,7 +613,7 @@ fn test_non_interactive_branch_requires_args() {
     let (_dir, _bare_dir, repo_path) = setup_temp_git_repo();
     std::env::set_current_dir(&repo_path).unwrap();
 
-    let mut cmd = Command::cargo_bin("tbdflow").unwrap();
+    let mut cmd = util::tbdflow_cmd();
     cmd.arg("--non-interactive").arg("branch");
     cmd.assert()
         .failure()
@@ -635,7 +627,7 @@ fn test_toon_status_output() {
     let (_dir, _bare_dir, repo_path) = setup_temp_git_repo();
     std::env::set_current_dir(&repo_path).unwrap();
 
-    let mut cmd = Command::cargo_bin("tbdflow").unwrap();
+    let mut cmd = util::tbdflow_cmd();
     cmd.arg("--toon").arg("status");
     cmd.assert()
         .success()
@@ -653,7 +645,7 @@ fn test_toon_verbose_trace() {
     let (_dir, _bare_dir, repo_path) = setup_temp_git_repo();
     std::env::set_current_dir(&repo_path).unwrap();
 
-    let mut cmd = Command::cargo_bin("tbdflow").unwrap();
+    let mut cmd = util::tbdflow_cmd();
     cmd.arg("--toon").arg("--verbose").arg("status");
     cmd.assert()
         .success()
@@ -667,7 +659,7 @@ fn test_doctor_toon_output() {
     let (_dir, _bare_dir, repo_path) = setup_temp_git_repo();
     std::env::set_current_dir(&repo_path).unwrap();
 
-    let mut cmd = Command::cargo_bin("tbdflow").unwrap();
+    let mut cmd = util::tbdflow_cmd();
     cmd.arg("--toon").arg("doctor");
     cmd.assert()
         .success()
@@ -704,7 +696,7 @@ fn test_unborn_first_commit() {
     std::fs::write(repo_path.join("README.md"), "hello").unwrap();
     std::env::set_current_dir(&repo_path).unwrap();
 
-    let mut cmd = Command::cargo_bin("tbdflow").unwrap();
+    let mut cmd = util::tbdflow_cmd();
     cmd.arg("--non-interactive")
         .arg("commit")
         .arg("-t")
@@ -731,7 +723,7 @@ fn test_context_toon() {
     let (_dir, _bare_dir, repo_path) = setup_temp_git_repo();
     std::env::set_current_dir(&repo_path).unwrap();
 
-    let mut cmd = Command::cargo_bin("tbdflow").unwrap();
+    let mut cmd = util::tbdflow_cmd();
     cmd.arg("--toon").arg("context");
     cmd.assert()
         .success()
@@ -750,7 +742,7 @@ fn test_toon_error_code() {
     std::env::set_current_dir(&repo_path).unwrap();
 
     // Missing args under --non-interactive => code: missing_args (on stdout TOON).
-    let mut cmd = Command::cargo_bin("tbdflow").unwrap();
+    let mut cmd = util::tbdflow_cmd();
     cmd.arg("--toon").arg("--non-interactive").arg("commit");
     cmd.assert()
         .failure()
@@ -773,7 +765,7 @@ fn test_commit_message_and_body_file() {
     )
     .unwrap();
 
-    let mut cmd = Command::cargo_bin("tbdflow").unwrap();
+    let mut cmd = util::tbdflow_cmd();
     cmd.arg("commit")
         .arg("-t")
         .arg("docs")
@@ -861,7 +853,7 @@ automatic_tags:
         .unwrap();
     std::fs::write(repo_path.join("README.md"), "my local change").unwrap();
 
-    let mut cmd = Command::cargo_bin("tbdflow").unwrap();
+    let mut cmd = util::tbdflow_cmd();
     cmd.arg("radar");
     cmd.assert()
         .success()

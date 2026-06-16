@@ -10,19 +10,23 @@ use tbdflow::git::RunOpts;
 use tbdflow::toon::Toon;
 use tbdflow::{
     branch, changelog, cli, commands, commit, config, git, intent, radar, recover, report, review,
-    say, wizard,
+    runtime, say, wizard,
 };
 
 fn main() -> anyhow::Result<()> {
     let cli = cli::Cli::parse();
+    // Resolve agent-mode defaults: explicit flag > TBDFLOW_* env > CLAUDECODE/CI
+    // auto-detect > built-in. Lets Claude Code/CI run tbdflow without repeating
+    // --non-interactive/--toon on every call (set them in .claude/settings.json).
+    let toon = runtime::toon(cli.toon);
     let opts = RunOpts::with_flags(
         cli.verbose,
         cli.dry_run,
-        cli.toon,
-        cli.non_interactive,
-        cli.no_sign,
+        toon,
+        runtime::non_interactive(cli.non_interactive),
+        runtime::no_sign(cli.no_sign),
     );
-    report::init(cli.toon, cli.command.name());
+    report::init(toon, cli.command.name());
 
     let result = run(cli, opts);
 

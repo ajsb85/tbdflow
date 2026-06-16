@@ -11,7 +11,14 @@ machine-readable** use by Claude Code.
 
 ## Golden rule for agents
 
-**Always pass `--non-interactive --toon`** (global flags, before the subcommand):
+Run tbdflow in **agent mode**: non-interactive (never prompts) + TOON (machine-readable).
+
+**In this repo it's already configured** — `.claude/settings.json` exports
+`TBDFLOW_NON_INTERACTIVE=1` and `TBDFLOW_TOON=1`, and tbdflow auto-enables non-interactive
+when `CLAUDECODE` or `CI` is set. So a bare `tbdflow <command>` already runs in agent mode
+here. Confirm with `tbdflow doctor` (`defaults.non_interactive_source`).
+
+**Elsewhere (no env configured), pass the flags explicitly:**
 
 ```bash
 tbdflow --non-interactive --toon <command> [args]
@@ -22,6 +29,9 @@ tbdflow --non-interactive --toon <command> [args]
 - `--toon` emits one machine-readable [TOON](https://github.com/toon-format/toon) document
   on stdout — parse `result`, `ok`, `warnings`, and `error` from it. Human prose is suppressed.
 - Add `--verbose` to also capture the exact git/gh command `trace[]`.
+
+Resolution precedence: **explicit flag > `TBDFLOW_*` env > `CLAUDECODE`/`CI` detect > default**
+(env vars: `TBDFLOW_NON_INTERACTIVE`, `TBDFLOW_TOON`, `TBDFLOW_NO_SIGN`).
 
 Example TOON result:
 

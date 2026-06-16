@@ -1,4 +1,8 @@
 {
+  "env": {
+    "TBDFLOW_NON_INTERACTIVE": "1",
+    "TBDFLOW_TOON": "1"
+  },
   "hooks": {
     "PreToolUse": [
       {
