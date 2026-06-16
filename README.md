@@ -1098,6 +1098,35 @@ tbdflow generate-man-page > tbdflow.1 && man tbdflow.1
 - [IntelliJ](https://github.com/cladam/tbdflow/tree/main/plugins/intellij)
 - [VS Code](https://github.com/hekonsek/tbdflow-vscode-extension)
 
+## Agent mode (quick example)
+
+Driving tbdflow from Claude Code or CI? Run it non-interactive with machine-readable
+[TOON](https://github.com/toon-format/toon) output — or just set the env once (see
+[Working with AI agents](#working-with-ai-agents-claude-code)) and drop the flags.
+
+```bash
+$ tbdflow --non-interactive --toon commit -t fix -s login -m "resolve timeout"
+command: commit
+ok: true
+result:
+  subject: "fix(login): resolve timeout"
+  type: fix
+  branch: main
+  sha: 7d2a007
+  signed: true
+  pushed: true
+```
+
+On failure you get a stable code to branch on — no prose parsing:
+
+```bash
+$ tbdflow --non-interactive --toon commit        # missing required args
+command: commit
+ok: false
+error: "--type and --message are required when running with --non-interactive"
+code: missing_args
+```
+
 ## Contributing
 
 First off, thank you for considering contributing to `tbdflow`! ❤️
