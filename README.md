@@ -227,6 +227,15 @@ lint:
     leading_blank: true
 ```
 
+#### Signed commits and tags
+
+If a signing key is configured (`user.signingkey`, or `commit.gpgsign = true`), `tbdflow`
+automatically GPG-signs commits and annotated tags, reusing your existing `gpg-agent` and
+git config (SSH signing works too). It sets `GPG_TTY` so signing works in non-TTY contexts.
+Pass `--no-sign` to skip signing for a single invocation, or set `commit.gpgsign = false`
+to opt out entirely. `tbdflow doctor` reports your signing status and verifies the latest
+tag's signature.
+
 #### Intent Log
 
 You tried three approaches before settling on the final one. By the time you commit, the first two are gone. From
@@ -325,12 +334,95 @@ the safety net.
 
 ---
 
+## Working with AI agents (Claude Code)
+
+`tbdflow` is built to be driven by AI coding agents, not just humans. Two global flags make
+it safe and efficient to call programmatically:
+
+- `--non-interactive` — never prompts. Missing required input becomes a clear error (like
+  `gh`), and interactive wizards/checklists are disabled.
+- `--toon` — emits one machine-readable [TOON](https://github.com/toon-format/toon) document
+  instead of human prose. Combine with `--verbose` to capture the underlying git/gh command
+  `trace[]`.
+
+```bash
+tbdflow --non-interactive --toon commit -t fix -s login -m "resolve timeout"
+```
+
+```text
+command: commit
+ok: true
+result:
+  subject: "fix(login): resolve timeout"
+  type: fix
+  branch: main
+  sha: 7d2a007
+  signed: true
+  pushed: true
+```
+
+On failure the document carries `ok: false`, a human `error`, and a **stable `code`**
+(`missing_args`, `dirty_worktree`, `ci_failing`, `not_a_repo`, `unborn_no_commits`, …) so an
+agent can branch on the code instead of parsing prose.
+
+### Situational awareness in one call
+
+`tbdflow context` collapses status + sync-state + radar + branch info into a single TOON
+document — fewer round-trips for an agent:
+
+```bash
+tbdflow --toon context
+```
+
+returns `branch, clean, unborn, ahead, behind, trunk_ci, stale[]{branch,days},
+overlaps[]{branch,author,file,kind}, recent`.
+
+### Preflight
+
+`tbdflow doctor` checks the environment — git, the GitHub CLI (`gh` installed +
+authenticated), GPG signing (and the latest tag's signature), and your configuration:
+
+```bash
+tbdflow doctor          # human report
+tbdflow --toon doctor   # machine-readable
+```
+
+### File-based commit messages
+
+To avoid shell-escaping multi-line bodies, read the subject/body from a file (or stdin
+with `-`):
+
+```bash
+tbdflow commit -t feat --message-file subject.txt --body-file body.txt
+printf 'line one\nline two' | tbdflow commit -t docs -m "update notes" --body-file -
+```
+
+### Bundled Claude Code integration
+
+This repo ships a ready-to-use [Claude Code](https://claude.com/claude-code) setup under
+`.claude/`:
+
+- **Skill** (`.claude/skills/tbdflow/`) — teaches the agent the full workflow, the
+  conventional-commit rules, and the per-command TOON result schemas.
+- **Slash commands** (`.claude/commands/`) — `/ship` (commit to trunk), `/catchup`
+  (sync + context), `/radar` (overlap scan).
+- **Guard hook** (`.claude/hooks/guard-git.sh` + `.claude/settings.json`) — a `PreToolUse`
+  hook that redirects raw `git commit|push|merge|rebase` to tbdflow (override with a trailing
+  `# raw-git-ok`).
+
+Generic, editor-agnostic agent docs live at the repo root: `SKILL.md` and `AGENT.md`.
+
+---
+
 ## Global options
 
-| Flag      | Description                                              | Required |
-|-----------|----------------------------------------------------------|----------|
-| --verbose | Prints the underlying Git commands as they are executed. | No       |
-| --dry-run | Simulate the command without making any changes.         | No       |
+| Flag              | Description                                                                 | Required |
+|-------------------|-----------------------------------------------------------------------------|----------|
+| --verbose         | Prints the underlying Git/gh commands as they are executed.                 | No       |
+| --dry-run         | Simulate the command without making any changes.                            | No       |
+| --toon            | Emit machine-readable TOON output instead of human prose (great for agents).| No       |
+| --non-interactive | Never prompt; missing input becomes an error and wizards are disabled.      | No       |
+| --no-sign         | Skip GPG signing for this commit/tag even if a signing key is configured.   | No       |
 
 ## Commands
 
@@ -356,7 +448,9 @@ tbdflow commit [options]
 | -t   | --type                 | The type of commit (e.g., feat, fix, chore).             | Yes      |
 | -s   | --scope                | The scope of the changes (e.g., api, ui).                | No       |
 | -m   | --message              | The descriptive commit message (subject line).           | Yes      |
+|      | --message-file         | Read the subject from a file (`-` for stdin).            | No       |
 |      | --body                 | Optional multi-line body for the commit message.         | No       |
+|      | --body-file            | Read the body from a file (`-` for stdin).              | No       |
 | -b   | --breaking             | Mark the commit as a breaking change.                    | No       |
 |      | --breaking-description | Provide a description for the 'BREAKING CHANGE:' footer. | No       |
 |      | --tag                  | Optionally add and push an annotated tag to this commit. | No       |
@@ -849,6 +943,16 @@ Not part of the core workflow, but handy for checking on things:
 # Does a pull, shows latest changes to main branch, and warns about stale branches.
 # If ci_check is enabled, checks trunk CI status first.
 tbdflow sync
+
+# One-shot situational awareness (branch, clean, ahead/behind, CI, stale, overlaps)
+tbdflow context
+
+# Environment preflight: git, gh auth, GPG signing, and config
+tbdflow doctor
+
+# Bootstrap a brand-new repository (optionally create the GitHub remote via gh)
+tbdflow init
+tbdflow --non-interactive init --create-remote owner/name --private --push
 
 # Inspect your current configuration
 tbdflow info
