@@ -204,15 +204,31 @@ pub struct ScopeConfig {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SubjectLineRules {
+    /// Hard limit: a longer subject is rejected.
     pub max_length: Option<usize>,
+    /// Soft limit: a longer subject only emits a warning (50/72 rule).
+    #[serde(default = "default_subject_recommended")]
+    pub recommended_length: Option<usize>,
     pub enforce_lowercase: Option<bool>,
     pub no_period: Option<bool>,
 }
 
+fn default_subject_recommended() -> Option<usize> {
+    Some(50)
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct BodyLineRules {
+    /// Hard limit: a longer body line is rejected.
     pub max_line_length: Option<usize>,
+    /// Soft limit: a longer body line only emits a warning (50/72 rule).
+    #[serde(default = "default_body_recommended")]
+    pub recommended_line_length: Option<usize>,
     pub leading_blank: Option<bool>,
+}
+
+fn default_body_recommended() -> Option<usize> {
+    Some(72)
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -303,11 +319,13 @@ impl Default for Config {
                 }),
                 subject_line_rules: Some(SubjectLineRules {
                     max_length: Some(72),
+                    recommended_length: Some(50),
                     enforce_lowercase: Some(true),
                     no_period: Some(true),
                 }),
                 body_line_rules: Some(BodyLineRules {
                     max_line_length: Some(80),
+                    recommended_line_length: Some(72),
                     leading_blank: Option::from(true),
                 }),
             }),

@@ -1,3 +1,13 @@
+# [0.31.0](https://github.com/ajsb85/tbdflow/releases/tag/v0.31.0) (2026-06-16)
+
+### ✨ Features
+- **(lint):** add non-blocking "50/72 rule" commit-message warnings — a subject over the
+  recommended 50 chars (72 stays the hard limit) and body lines over the recommended 72 chars
+  now emit warnings (human output + TOON `warnings[]`) without rejecting the commit. New
+  configurable `subject_line_rules.recommended_length` (default 50) and
+  `body_line_rules.recommended_line_length` (default 72). Lengths counted in characters.
+
+
 # [0.30.0](https://github.com/ajsb85/tbdflow/releases/tag/v0.30.0) (2026-06-16)
 
 ### ✨ Features

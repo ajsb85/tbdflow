@@ -219,13 +219,28 @@ lint:
     enabled: true
     enforce_lowercase: true
   subject_line_rules:
-    max_length: 72
+    max_length: 72          # hard limit (commit rejected)
+    recommended_length: 50  # soft limit (warning only) — the "50/72 rule"
     enforce_lowercase: true
     no_period: true
   body_line_rules:
-    max_line_length: 80
+    max_line_length: 80          # hard limit (commit rejected)
+    recommended_line_length: 72  # soft limit (warning only)
     leading_blank: true
 ```
+
+##### The 50/72 rule
+
+Beyond the hard limits, `tbdflow` follows the widely-used **50/72 rule** and emits a
+*non-blocking warning* (shown in human output and in the TOON `warnings[]`) when:
+
+- the **subject line** exceeds the recommended **50** characters (it stays readable in
+  compact views like `git log --oneline`; 72 remains the hard cap), or
+- a **body line** exceeds the recommended **72** characters (so it won't wrap awkwardly in
+  an 80-column terminal after Git's indentation).
+
+These are guidance, not gates — the commit still goes through. Lengths are measured in
+characters, not bytes.
 
 #### Signed commits and tags
 

@@ -97,6 +97,7 @@ pub enum Commands {
     /// Commits changes to the current branch or 'main' if no branch is checked out.
     #[command(
         after_help = "Use the imperative, present tense: \"change\" not \"changed\". Think of This commit will...\n\
+    50/72 RULE: subject \u{2264}50 chars recommended (72 hard limit), body \u{2264}72 chars/line recommended; longer lengths warn but don't block.\n\n\
     COMMON COMMIT TYPES:\n  \
     feat:     A new feature for the user.\n  \
     fix:      A bug fix for the user.\n  \

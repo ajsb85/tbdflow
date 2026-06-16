@@ -191,6 +191,55 @@ pub fn is_valid_body_lines(body: &str, config: &Config) -> bool {
     true
 }
 
+/// Non-blocking subject-line warnings based on the "50/72 rule": the full
+/// subject (e.g. `feat(api): ...`) should be ≤ the recommended length (50) for
+/// readability in compact views like `git log --oneline`; 72 is the hard cap.
+/// Counts Unicode scalar values, not bytes.
+pub fn subject_length_warnings(subject: &str, config: &Config) -> Vec<String> {
+    let mut warnings = Vec::new();
+    if let Some(lint) = &config.lint {
+        if let Some(rules) = &lint.subject_line_rules {
+            let recommended = rules.recommended_length.unwrap_or(50);
+            let hard = rules.max_length.unwrap_or(72);
+            let len = subject.chars().count();
+            if len > hard {
+                warnings.push(format!(
+                    "subject line is {} chars; exceeds the {}-char hard limit (50/72 rule)",
+                    len, hard
+                ));
+            } else if len > recommended {
+                warnings.push(format!(
+                    "subject line is {} chars; the 50/72 rule recommends \u{2264} {} for compact views",
+                    len, recommended
+                ));
+            }
+        }
+    }
+    warnings
+}
+
+/// Non-blocking body warnings: body lines should wrap at the recommended length
+/// (72) so they don't wrap awkwardly in an 80-column terminal after Git's indent.
+pub fn body_length_warnings(body: &str, config: &Config) -> Vec<String> {
+    let mut warnings = Vec::new();
+    if let Some(lint) = &config.lint {
+        if let Some(rules) = &lint.body_line_rules {
+            let recommended = rules.recommended_line_length.unwrap_or(72);
+            let over = body
+                .lines()
+                .filter(|l| l.chars().count() > recommended)
+                .count();
+            if over > 0 {
+                warnings.push(format!(
+                    "{} body line(s) exceed the recommended {} chars (50/72 rule)",
+                    over, recommended
+                ));
+            }
+        }
+    }
+    warnings
+}
+
 pub fn handle_commit(opts: RunOpts, config: &Config, params: CommitParams) -> Result<()> {
     crate::say!("{}", "--- Committing changes ---".blue());
 
@@ -262,6 +311,16 @@ pub fn handle_commit(opts: RunOpts, config: &Config, params: CommitParams) -> Re
         "{}{}{}: {}",
         params.r#type, scope_part, breaking_part, params.message
     );
+
+    // Non-blocking 50/72-rule guidance (warnings, not errors).
+    for w in subject_length_warnings(&header, config) {
+        report::warn(w);
+    }
+    if let Some(body_text) = params.body.as_deref() {
+        for w in body_length_warnings(body_text, config) {
+            report::warn(w);
+        }
+    }
 
     let dod_config = config::load_dod_config().unwrap_or_default();
     let todo_footer_result = if params.no_verify || dod_config.checklist.is_empty() {
@@ -677,6 +736,56 @@ mod tests {
             ..Default::default()
         };
         assert!(is_valid_issue_key(&Some("PROJ-1".to_string()), &config).is_err());
+    }
+
+    #[test]
+    fn subject_no_warning_under_recommended() {
+        let config = config_with_defaults();
+        // "feat: short subject" is well under 50.
+        assert!(subject_length_warnings("feat: short subject", &config).is_empty());
+    }
+
+    #[test]
+    fn subject_warns_over_recommended_under_hard() {
+        let config = config_with_defaults();
+        // 60-char subject: over 50 (recommended) but under 72 (hard).
+        let subject = format!("feat: {}", "a".repeat(54)); // 6 + 54 = 60
+        let w = subject_length_warnings(&subject, &config);
+        assert_eq!(w.len(), 1);
+        assert!(w[0].contains("recommends"));
+    }
+
+    #[test]
+    fn subject_warns_over_hard_limit() {
+        let config = config_with_defaults();
+        let subject = format!("feat: {}", "a".repeat(80)); // 86 chars > 72
+        let w = subject_length_warnings(&subject, &config);
+        assert_eq!(w.len(), 1);
+        assert!(w[0].contains("hard limit"));
+    }
+
+    #[test]
+    fn subject_warning_counts_chars_not_bytes() {
+        let config = config_with_defaults();
+        // 51 multi-byte chars: over the 50 recommendation by character count.
+        let subject = "é".repeat(51);
+        let w = subject_length_warnings(&subject, &config);
+        assert_eq!(w.len(), 1);
+    }
+
+    #[test]
+    fn body_no_warning_under_recommended() {
+        let config = config_with_defaults();
+        assert!(body_length_warnings("a short body line\nanother one", &config).is_empty());
+    }
+
+    #[test]
+    fn body_warns_over_recommended() {
+        let config = config_with_defaults();
+        let body = format!("ok line\n{}\nok", "x".repeat(73)); // one line > 72
+        let w = body_length_warnings(&body, &config);
+        assert_eq!(w.len(), 1);
+        assert!(w[0].contains("72"));
     }
 
     #[test]

@@ -83,9 +83,12 @@ Pre-commit habit: run `tbdflow --non-interactive --toon sync` before `commit`.
 Header: `type(scope)!: subject`
 
 - **type** ∈ `feat fix chore docs refactor test build ci perf revert style`. Never invent one. Default `chore` if nothing behaves differently.
-- **subject** ≤ **72 chars**, lowercase first letter, no trailing period, imperative ("add", not "added").
+- **subject** — aim for ≤ **50 chars** (the "50/72 rule"; tbdflow warns past 50), **72 hard max**;
+  lowercase first letter, no trailing period, imperative ("add", not "added"). The length
+  counts the full `type(scope): subject` line.
 - **scope** optional, lowercase, no spaces.
-- **body** lines ≤ **80 chars**, separated from the subject by a blank line (use `--body`).
+- **body** lines ≤ **72 chars** recommended (warned past 72), **80 hard max**, separated from
+  the subject by a blank line (use `--body` or `--body-file`).
 - **issue key** `--issue` must match `^[A-Z]+-\d+$` (e.g. `PROJ-123`).
 - Breaking change: pass `-b`; describe with `--breaking-description "..."`.
 - Branch name (`-n`): lowercase, hyphen-separated, no spaces. Slugify titles (`"Fix login bug"` → `fix/login-bug`).

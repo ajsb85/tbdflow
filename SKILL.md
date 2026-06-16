@@ -410,7 +410,8 @@ This prevents conflicts and ensures commits are based on the latest trunk state.
 
 | Rule           | Requirement                                                                                                  | Example                              |
 |----------------|--------------------------------------------------------------------------------------------------------------|--------------------------------------|
-| Max Length     | 72 characters                                                                                                | `"add user profile"` ✓               |
+| Recommended Length | ≤ 50 characters (50/72 rule) — a warning is emitted past 50, not an error                                | `"add user profile"` ✓               |
+| Max Length     | 72 characters (hard limit, commit rejected)                                                                  | `"add user profile"` ✓               |
 | Capitalisation | Must not start with a capital letter                                                                         | `"add feature"` ✓, `"Add feature"` ✗ |
 | Punctuation    | Must not end with a period                                                                                   | `"fix bug"` ✓, `"fix bug."` ✗        |
 | Type           | Must be one of: `feat`, `fix`, `chore`, `docs`, `refactor`, `test`, `build`, `ci`, `perf`, `revert`, `style` | `feat` ✓, `feature` ✗                |
@@ -420,10 +421,11 @@ This prevents conflicts and ensures commits are based on the latest trunk state.
 
 #### Commit Body (Optional)
 
-| Rule        | Requirement                                    |
-|-------------|------------------------------------------------|
-| Line Length | Each line must not exceed 80 characters        |
-| Separation  | Must be separated from subject by a blank line |
+| Rule        | Requirement                                              |
+|-------------|---------------------------------------------------------|
+| Recommended Line Length | ≤ 72 characters (50/72 rule) — warning past 72|
+| Line Length | Each line must not exceed 80 characters (hard limit)    |
+| Separation  | Must be separated from subject by a blank line          |
 
 #### Issue Key (`--issue`)
 
