@@ -77,9 +77,21 @@ Think of it as a **workflow assistant** that wraps the repeatable parts of your 
 
 ### Installation
 
-You need [Rust and Cargo](https://www.rust-lang.org/tools/install) installed.
+#### Download a prebuilt binary (no Rust required)
+
+Each [GitHub release](https://github.com/ajsb85/tbdflow/releases) ships a binary named
+`tbdflow-<arch>-<os>` (e.g. `tbdflow-x86_64-linux`):
+
+```bash
+curl -fsSL "https://github.com/ajsb85/tbdflow/releases/latest/download/tbdflow-$(uname -m)-$(uname -s | tr '[:upper:]' '[:lower:]')" -o tbdflow
+chmod +x tbdflow
+sudo install -m 0755 tbdflow /usr/local/bin/tbdflow
+```
 
 #### Installing from crates.io
+
+Requires [Rust and Cargo](https://www.rust-lang.org/tools/install). Note: crates.io tracks the
+upstream crate — for this fork's latest features use a release binary or build from source.
 
 ```bash
 cargo install tbdflow
@@ -93,12 +105,22 @@ tbdflow update
 
 #### Building from source
 
-Or build it yourself:
+Or build it yourself (requires Rust and Cargo):
 
 ```bash
-git clone https://github.com/cladam/tbdflow.git
+git clone https://github.com/ajsb85/tbdflow.git
 cd tbdflow
 sudo cargo install --path . --root /usr/local
+```
+
+#### Shell completions and man page
+
+After installing, generate and install completions and the man page (see
+[Advanced Usage](#shell-completion) for per-shell paths):
+
+```bash
+tbdflow generate-completion bash | sudo tee /usr/share/bash-completion/completions/tbdflow >/dev/null
+tbdflow generate-man-page | sudo tee /usr/local/share/man/man1/tbdflow.1 >/dev/null && sudo mandb -q
 ```
 
 ### Monorepo Support

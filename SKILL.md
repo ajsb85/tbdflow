@@ -14,7 +14,7 @@ tags:
 
 ## Overview
 
-This skill enables an AI agent to manage a **Trunk-Based Development (TBD)** workflow using the `tbdflow` CLI (v0.29.0).
+This skill enables an AI agent to manage a **Trunk-Based Development (TBD)** workflow using the `tbdflow` CLI (v0.32.1).
 
 The skill exists to:
 
@@ -99,34 +99,35 @@ If `tbdflow` is **not found**, the agent must attempt to install it automaticall
 
 ### Installation Strategies (in order of preference)
 
-**1. Cargo Install (requires Rust toolchain)**
+**1. GitHub Releases (pre-built binary, preferred)**
 
-If `cargo` is available on the system:
+If `curl` is available — no Rust toolchain required, and this gets the fork's latest features:
+
+```bash
+curl -fsSL "https://github.com/ajsb85/tbdflow/releases/latest/download/tbdflow-$(uname -m)-$(uname -s | tr '[:upper:]' '[:lower:]')" -o tbdflow
+chmod +x tbdflow && sudo install -m 0755 tbdflow /usr/local/bin/tbdflow
+```
+
+Use `~/.local/bin` instead if `/usr/local/bin` is not writable.
+
+**2. Cargo Install (requires Rust toolchain)**
+
+If `cargo` is available:
 
 ```bash
 cargo install tbdflow
 ```
 
-This downloads the latest release from [crates.io](https://crates.io/crates/tbdflow) and compiles it locally.
-
-**2. GitHub Releases (pre-built binary)**
-
-If `cargo` is not available but `curl` is:
-
-```bash
-curl -fsSL https://github.com/cladam/tbdflow/releases/latest/download/tbdflow-$(uname -m)-$(uname -s | tr '[:upper:]' '[:lower:]') -o /usr/local/bin/tbdflow
-chmod +x /usr/local/bin/tbdflow
-```
-
-Adjust the binary path if `/usr/local/bin` is not writable (e.g. use `~/.local/bin`).
+This compiles from [crates.io](https://crates.io/crates/tbdflow); crates.io tracks the upstream
+crate, so prefer the release binary above for this fork's newer features.
 
 **3. Manual Prompt**
 
 If neither strategy is viable, inform the user:
 
 > `tbdflow` is not installed. Please install it using one of:
+> - Download a binary from https://github.com/ajsb85/tbdflow/releases
 > - `cargo install tbdflow`
-> - Download a binary from https://github.com/cladam/tbdflow/releases
 >
 > See the README for details.
 

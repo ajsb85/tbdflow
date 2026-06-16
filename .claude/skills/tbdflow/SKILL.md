@@ -66,9 +66,14 @@ tbdflow --toon doctor
 ```
 
 Checks git, the GitHub CLI (`gh` installed + authenticated), GPG signing, and config.
-If `tbdflow` itself is missing: `cargo install tbdflow`, or download a release binary from
-https://github.com/cladam/tbdflow/releases. If `healthy: false`, surface the failing
-`checks[].detail` to the user before proceeding.
+If `tbdflow` itself is missing, install a release binary (no Rust needed):
+
+```bash
+curl -fsSL "https://github.com/ajsb85/tbdflow/releases/latest/download/tbdflow-$(uname -m)-$(uname -s | tr '[:upper:]' '[:lower:]')" -o tbdflow && chmod +x tbdflow && sudo install -m 0755 tbdflow /usr/local/bin/tbdflow
+```
+
+or `cargo install tbdflow` (crates.io tracks upstream; use the release binary for this fork's
+features). If `healthy: false`, surface the failing `checks[].detail` to the user first.
 
 ## Commands
 
