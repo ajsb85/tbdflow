@@ -417,6 +417,20 @@ pub fn has_origin_remote(opts: RunOpts) -> bool {
         .unwrap_or(false)
 }
 
+/// Commits the current branch is `(ahead, behind)` relative to its upstream.
+/// Returns `None` when there is no upstream (e.g. unborn or untracked branch).
+pub fn ahead_behind(opts: RunOpts) -> Option<(u32, u32)> {
+    if !has_upstream(opts) {
+        return None;
+    }
+    let out =
+        run_git_command("rev-list", &["--left-right", "--count", "@{u}...HEAD"], opts).ok()?;
+    let mut parts = out.split_whitespace();
+    let behind: u32 = parts.next()?.parse().ok()?;
+    let ahead: u32 = parts.next()?.parse().ok()?;
+    Some((ahead, behind))
+}
+
 pub fn push_set_upstream(branch_name: &str, opts: RunOpts) -> Result<String> {
     run_git_command("push", &["--set-upstream", "origin", branch_name], opts)
 }

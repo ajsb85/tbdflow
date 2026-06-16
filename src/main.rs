@@ -27,8 +27,8 @@ fn main() -> anyhow::Result<()> {
     let result = run(cli, opts);
 
     match &result {
-        Ok(()) => report::flush(true, None),
-        Err(e) => report::flush(false, Some(format!("{:#}", e))),
+        Ok(()) => report::flush(true, None, None),
+        Err(e) => report::flush(false, Some(format!("{:#}", e)), error_code(e)),
     }
     result
 }
@@ -40,6 +40,52 @@ fn non_interactive_error(needs: &str) -> anyhow::Error {
         "{} when running with --non-interactive (interactive wizard disabled)",
         needs
     )
+}
+
+/// Read a text argument from a file path, or from stdin when the path is `-`.
+fn read_text_arg(path: &str) -> anyhow::Result<String> {
+    use anyhow::Context;
+    if path == "-" {
+        let mut buf = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)
+            .context("Failed to read from stdin")?;
+        Ok(buf)
+    } else {
+        std::fs::read_to_string(path).with_context(|| format!("Failed to read file '{}'", path))
+    }
+}
+
+/// Map an error to a stable, machine-readable code for the TOON `code` field so
+/// agents can branch on the failure type without parsing prose. Centralised so
+/// the codes stay consistent. Returns `None` for unclassified errors.
+fn error_code(err: &anyhow::Error) -> Option<&'static str> {
+    use tbdflow::git::GitError;
+    if let Some(git_err) = err.downcast_ref::<GitError>() {
+        return Some(match git_err {
+            GitError::Git(_) => "git_failed",
+            GitError::DirectoryNotClean(_) => "dirty_worktree",
+            GitError::InvalidBranchType(_) => "invalid_branch_type",
+            GitError::BranchNotFound(_) => "branch_not_found",
+            GitError::TagAlreadyExists(_) => "tag_exists",
+            GitError::CannotCompleteMainBranch => "cannot_complete_main",
+            GitError::NotOnMainBranch(_) => "not_on_main",
+            GitError::NotAGitRepository(_) => "not_a_repo",
+        });
+    }
+    // Our own anyhow!-constructed errors: classify by a stable marker substring.
+    let msg = err.to_string();
+    let code = if msg.contains("not a git repository") {
+        "not_a_repo"
+    } else if msg.contains("--non-interactive") {
+        "missing_args"
+    } else if msg.contains("no commits yet") {
+        "unborn_no_commits"
+    } else if msg.contains("trunk CI is failing") {
+        "ci_failing"
+    } else {
+        return None;
+    };
+    Some(code)
 }
 
 fn run(cli: cli::Cli, opts: RunOpts) -> anyhow::Result<()> {
@@ -100,7 +146,9 @@ fn run(cli: cli::Cli, opts: RunOpts) -> anyhow::Result<()> {
             r#type,
             scope,
             message,
+            message_file,
             body,
+            body_file,
             breaking,
             breaking_description,
             tag,
@@ -108,6 +156,19 @@ fn run(cli: cli::Cli, opts: RunOpts) -> anyhow::Result<()> {
             issue,
             include_projects,
         } => {
+            // Resolve subject/body from files or stdin when requested. Files
+            // avoid shell-escaping pain for multi-line bodies. (clap already
+            // guarantees --message/--message-file and --body/--body-file are
+            // mutually exclusive.)
+            let message = match message_file {
+                Some(path) => Some(read_text_arg(&path)?.trim_end().to_string()),
+                None => message,
+            };
+            let body = match body_file {
+                Some(path) => Some(read_text_arg(&path)?.trim_end_matches('\n').to_string()),
+                None => body,
+            };
+
             let params = match (r#type, message) {
                 (Some(t), Some(m)) => CommitParams {
                     r#type: t,
@@ -202,6 +263,9 @@ fn run(cli: cli::Cli, opts: RunOpts) -> anyhow::Result<()> {
                 ("clean", Toon::Bool(status_output.is_empty())),
                 ("status", Toon::str(status_output)),
             ]));
+        }
+        Commands::Context => {
+            commands::handle_context(opts, &config)?;
         }
         Commands::CurrentBranch => {
             say!("{}", "--- Current branch ---".to_string().blue());

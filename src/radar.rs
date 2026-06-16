@@ -1,5 +1,6 @@
 use crate::config::{Config, RadarLevel, RadarOnCommit};
 use crate::git::RunOpts;
+use crate::toon::Toon;
 use crate::{git, intent, report};
 use anyhow::Result;
 use chrono::Utc;
@@ -272,6 +273,7 @@ pub fn handle_radar(opts: RunOpts, config: &Config) -> Result<()> {
             "Radar is disabled. Enable it in .tbdflow.yml with:\n\n  radar:\n    enabled: true"
                 .yellow()
         );
+        report::result(Toon::obj(vec![("enabled", Toon::Bool(false))]));
         return Ok(());
     }
 
@@ -280,6 +282,7 @@ pub fn handle_radar(opts: RunOpts, config: &Config) -> Result<()> {
 
     if result.local_files_count == 0 {
         crate::say!("{}", "No local changes detected. Nothing to scan.".green());
+        report::result(radar_result_toon(&result));
         return Ok(());
     }
 
@@ -333,7 +336,34 @@ pub fn handle_radar(opts: RunOpts, config: &Config) -> Result<()> {
 
     radar_snapshot(opts);
 
+    report::result(radar_result_toon(&result));
     Ok(())
+}
+
+/// Build a structured TOON result from a radar scan: counts plus a tabular
+/// `overlaps[]{branch,author,file,kind}` array.
+fn radar_result_toon(result: &RadarResult) -> Toon {
+    let mut rows = Vec::new();
+    for o in &result.overlaps {
+        for f in &o.overlapping_files {
+            let kind = match f.overlap_kind {
+                OverlapKind::SameFile => "same-file",
+                OverlapKind::LineOverlap { .. } => "line-overlap",
+            };
+            rows.push(Toon::obj(vec![
+                ("branch", Toon::str(o.branch_name.clone())),
+                ("author", Toon::str(o.author.clone())),
+                ("file", Toon::str(f.file_path.clone())),
+                ("kind", Toon::str(kind)),
+            ]));
+        }
+    }
+    Toon::obj(vec![
+        ("enabled", Toon::Bool(true)),
+        ("branches_scanned", Toon::Int(result.branches_scanned as i64)),
+        ("local_files", Toon::Int(result.local_files_count as i64)),
+        ("overlaps", Toon::Arr(rows)),
+    ])
 }
 
 /// Silently captures a WIP snapshot if the working directory is dirty

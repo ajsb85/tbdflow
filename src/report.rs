@@ -120,7 +120,7 @@ fn push_trace(tool: &str, argv: &[&str], dry_run: bool) {
 
 /// Emit the final TOON document (no-op in human mode). Called once at the end of
 /// `main` with the overall success state.
-pub fn flush(ok: bool, error: Option<String>) {
+pub fn flush(ok: bool, error: Option<String>, code: Option<&str>) {
     STATE.with(|s| {
         let s = s.borrow();
         if !s.toon {
@@ -144,6 +144,10 @@ pub fn flush(ok: bool, error: Option<String>) {
         }
         if let Some(e) = error {
             fields.push(("error".to_string(), Toon::str(e)));
+        }
+        // Stable, machine-readable failure classifier for agents.
+        if let Some(c) = code {
+            fields.push(("code".to_string(), Toon::str(c)));
         }
         print!("{}", encode(&Toon::Obj(fields)));
     });

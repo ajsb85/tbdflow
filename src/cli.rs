@@ -44,6 +44,7 @@ impl Commands {
             Commands::Sync => "sync",
             Commands::Radar => "radar",
             Commands::Status => "status",
+            Commands::Context => "context",
             Commands::CurrentBranch => "current-branch",
             Commands::CheckBranches => "check-branches",
             Commands::GenerateManPage => "generate-man-page",
@@ -121,6 +122,14 @@ pub enum Commands {
         /// The descriptive commit message.
         #[arg(short, long)]
         message: Option<String>,
+        /// Read the commit subject from a file ('-' for stdin). Avoids shell
+        /// escaping for the subject. Conflicts with --message.
+        #[arg(long, conflicts_with = "message")]
+        message_file: Option<String>,
+        /// Read the commit body from a file ('-' for stdin). Avoids multi-line
+        /// shell escaping and 80-char wrapping pitfalls. Conflicts with --body.
+        #[arg(long, conflicts_with = "body")]
+        body_file: Option<String>,
         /// Mark this commit as a breaking change.
         #[arg(short, long)]
         breaking: bool,
@@ -194,6 +203,17 @@ pub enum Commands {
     Radar,
     /// Shows the current git status.
     Status,
+    /// One-shot situational awareness for agents: branch, cleanliness,
+    /// ahead/behind, stale branches, trunk CI, and radar overlaps in a single
+    /// call. Designed to be read with --toon.
+    #[command(
+        name = "context",
+        after_help = "FEWER ROUND-TRIPS FOR AGENTS:\n  \
+    Collapses status + sync-state + radar + branch info into one TOON document.\n\n\
+    EXAMPLE:\n  \
+    tbdflow --toon context"
+    )]
+    Context,
     /// Shows the current git branch name.
     #[command(name = "current-branch")]
     CurrentBranch,

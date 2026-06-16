@@ -724,6 +724,76 @@ fn test_unborn_first_commit() {
     assert!(String::from_utf8_lossy(&log.stdout).contains("initial setup"));
 }
 
+/// `context` returns one-shot situational awareness as a TOON document.
+#[test]
+#[serial]
+fn test_context_toon() {
+    let (_dir, _bare_dir, repo_path) = setup_temp_git_repo();
+    std::env::set_current_dir(&repo_path).unwrap();
+
+    let mut cmd = Command::cargo_bin("tbdflow").unwrap();
+    cmd.arg("--toon").arg("context");
+    cmd.assert()
+        .success()
+        .stdout(contains("command: context"))
+        .stdout(contains("branch:"))
+        .stdout(contains("clean:"))
+        .stdout(contains("trunk_ci:"))
+        .stdout(contains("ahead:"));
+}
+
+/// TOON errors carry a stable machine-readable `code` for deterministic branching.
+#[test]
+#[serial]
+fn test_toon_error_code() {
+    let (_dir, _bare_dir, repo_path) = setup_temp_git_repo();
+    std::env::set_current_dir(&repo_path).unwrap();
+
+    // Missing args under --non-interactive => code: missing_args (on stdout TOON).
+    let mut cmd = Command::cargo_bin("tbdflow").unwrap();
+    cmd.arg("--toon").arg("--non-interactive").arg("commit");
+    cmd.assert()
+        .failure()
+        .stdout(contains("ok: false"))
+        .stdout(contains("code: missing_args"));
+}
+
+/// `--message-file` and `--body-file` read the subject/body from a file.
+#[test]
+#[serial]
+fn test_commit_message_and_body_file() {
+    let (_dir, _bare_dir, repo_path) = setup_temp_git_repo();
+    std::env::set_current_dir(&repo_path).unwrap();
+
+    std::fs::write(repo_path.join("FILE.md"), "content").unwrap();
+    std::fs::write(repo_path.join("subject.txt"), "add a file from message file\n").unwrap();
+    std::fs::write(
+        repo_path.join("body.txt"),
+        "first body line\nsecond body line\n",
+    )
+    .unwrap();
+
+    let mut cmd = Command::cargo_bin("tbdflow").unwrap();
+    cmd.arg("commit")
+        .arg("-t")
+        .arg("docs")
+        .arg("--message-file")
+        .arg("subject.txt")
+        .arg("--body-file")
+        .arg("body.txt");
+    cmd.assert().success();
+
+    let msg = std::process::Command::new("git")
+        .args(["log", "-1", "--format=%B"])
+        .current_dir(&repo_path)
+        .output()
+        .unwrap();
+    let msg = String::from_utf8_lossy(&msg.stdout);
+    assert!(msg.contains("docs: add a file from message file"));
+    assert!(msg.contains("first body line"));
+    assert!(msg.contains("second body line"));
+}
+
 /// Tests that the radar command detects file-level overlaps with an active remote branch.
 #[test]
 #[serial]

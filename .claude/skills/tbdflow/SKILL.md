@@ -38,7 +38,16 @@ result:
   pushed: true
 ```
 
-If `ok: false`, read `error` and fix the inputs — never fall back to raw `git`.
+If `ok: false`, read the stable **`code`** field (not the prose) and branch on it —
+never fall back to raw `git`. Codes include: `missing_args`, `dirty_worktree`,
+`ci_failing`, `not_a_repo`, `unborn_no_commits`, `branch_not_found`, `tag_exists`,
+`not_on_main`, `cannot_complete_main`, `git_failed`.
+
+## Situational awareness in one call
+
+Prefer **`tbdflow --toon context`** over running `status` + `sync` + `radar` separately —
+it returns branch, `clean`, `unborn`, `ahead`/`behind`, `trunk_ci`, `stale[]`,
+radar `overlaps[]{branch,author,file,kind}`, and recent commits in a single round-trip.
 
 ## Preflight (run once per session)
 
@@ -55,6 +64,7 @@ https://github.com/cladam/tbdflow/releases. If `healthy: false`, surface the fai
 
 | Intent | Command |
 |--------|---------|
+| Situational awareness | `tbdflow --toon context` |
 | Commit to trunk | `tbdflow --non-interactive --toon commit -t <type> [-s <scope>] -m "<msg>" [--issue KEY-123] [-b] [--body "..."]` |
 | Start a branch | `tbdflow --non-interactive --toon branch -t <type> -n <slug> [--issue KEY-123]` |
 | Merge a branch back | `tbdflow --non-interactive --toon complete -t <type> -n <slug>` |
@@ -82,6 +92,10 @@ Header: `type(scope)!: subject`
 
 Staging is automatic — never run `git add`. Accumulated `note` breadcrumbs are folded into the next commit body; drop 1–2 before any non-trivial commit to record the *why*.
 
+For multi-line bodies, avoid shell-escaping: write the text to a file and pass
+`--body-file <path>` (or `--body-file -` to read stdin). `--message-file` does the same
+for the subject. These conflict with `-m`/`--body`.
+
 ## GPG signing
 
 Commits and tags are **signed automatically** when a signing key is configured
@@ -98,6 +112,31 @@ the user. Check signing status with `tbdflow --toon doctor`.
   existing remote, or `--create-remote owner/name [--private] [--push]` to create one via `gh`.
 - The **first `commit`** on an unborn repo skips the pre-pull and sets the upstream on push.
 - `branch` requires at least one commit — make the initial commit first.
+
+## TOON `result` schemas
+
+Field names you can rely on per command (all under `result:` in `--toon` mode):
+
+- **context** — `branch, clean, unborn, upstream, ahead, behind, trunk_ci,
+  stale[]{branch,days}, overlaps[]{branch,author,file,kind}, recent`
+- **commit** — `subject, type, branch, sha, signed, pushed` (+ `tag` if tagged)
+- **branch** — `branch, created`
+- **complete** — `branch, merged, deleted`
+- **sync** — `branch, clean, overlap`
+- **status** — `clean, status`
+- **radar** — `enabled, branches_scanned, local_files, overlaps[]{branch,author,file,kind}`
+- **doctor** — `healthy, checks[]{name,ok,detail}`
+- **info** — `main_branch, issue_strategy, lint, review, radar, ci_check, monorepo, remote, current_branch`
+- **init** — `initialised, config_created, remote_linked` (+ `remote`)
+- **undo** — `reverted, pushed`
+
+On failure the document has `ok: false`, a human `error`, and a stable `code` (see above).
+
+## Slash commands (this repo)
+
+`/ship` (commit to trunk), `/catchup` (sync + context), `/radar` (overlap scan) wrap the
+right tbdflow invocations. A `PreToolUse` guard hook blocks raw `git commit|push|merge|rebase`
+and redirects to tbdflow (override with a trailing `# raw-git-ok`).
 
 ## When NOT to use tbdflow
 

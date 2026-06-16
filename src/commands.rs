@@ -227,6 +227,109 @@ pub fn handle_doctor(opts: RunOpts, config: &config::Config) -> Result<()> {
     Ok(())
 }
 
+/// One-shot situational awareness for agents: collapses status, sync-state,
+/// stale-branch, trunk-CI, and radar-overlap lookups into a single TOON result.
+pub fn handle_context(opts: RunOpts, config: &config::Config) -> Result<()> {
+    crate::say!("{}", "--- Context ---".blue());
+
+    let branch = git::get_current_branch(opts).unwrap_or_default();
+    let unborn = git::is_unborn_head(opts);
+    let upstream = git::has_upstream(opts);
+    let status_output = git::get_scoped_status(config, opts).unwrap_or_default();
+    let clean = status_output.is_empty();
+    let (ahead, behind) = git::ahead_behind(opts).unwrap_or((0, 0));
+
+    let stale = if unborn {
+        Vec::new()
+    } else {
+        git::get_stale_branches(opts, &branch, config.stale_branch_threshold_days)
+            .unwrap_or_default()
+    };
+
+    // Trunk CI (only meaningful when enabled and a remote exists).
+    let trunk = radar::get_trunk_status(config, opts);
+    let ci = match trunk.ci {
+        git::CiStatus::Green => "green",
+        git::CiStatus::Failed => "failed",
+        git::CiStatus::Pending => "pending",
+        git::CiStatus::Unknown(_) => "unknown",
+    };
+
+    // Radar overlaps (best-effort; needs a remote and a dirty tree).
+    let overlaps = if config.radar.enabled && git::has_origin_remote(opts) {
+        radar::scan(config, opts).ok()
+    } else {
+        None
+    };
+
+    // Human summary
+    crate::say!(
+        "Branch {} ({}), {}{} | CI: {}",
+        branch.bold(),
+        if clean { "clean".green() } else { "dirty".yellow() },
+        format!("ahead {} ", ahead),
+        format!("behind {}", behind),
+        ci
+    );
+    if !stale.is_empty() {
+        crate::say!("{}", format!("{} stale branch(es)", stale.len()).yellow());
+    }
+
+    // Structured result
+    let mut fields = vec![
+        ("branch".to_string(), Toon::str(branch)),
+        ("clean".to_string(), Toon::Bool(clean)),
+        ("unborn".to_string(), Toon::Bool(unborn)),
+        ("upstream".to_string(), Toon::Bool(upstream)),
+        ("ahead".to_string(), Toon::Int(ahead as i64)),
+        ("behind".to_string(), Toon::Int(behind as i64)),
+        ("trunk_ci".to_string(), Toon::str(ci)),
+        (
+            "stale".to_string(),
+            Toon::Arr(
+                stale
+                    .into_iter()
+                    .map(|(b, days)| {
+                        Toon::obj(vec![
+                            ("branch", Toon::str(b)),
+                            ("days", Toon::Int(days)),
+                        ])
+                    })
+                    .collect(),
+            ),
+        ),
+        ("overlaps".to_string(), Toon::Arr(overlap_rows(overlaps))),
+    ];
+    if let Ok(recent) = git::log_graph(opts) {
+        fields.push(("recent".to_string(), Toon::str(recent)));
+    }
+    report::result(Toon::Obj(fields));
+    Ok(())
+}
+
+/// Flatten radar overlaps into tabular rows `{branch,author,file,kind}`.
+fn overlap_rows(result: Option<radar::RadarResult>) -> Vec<Toon> {
+    let Some(result) = result else {
+        return Vec::new();
+    };
+    let mut rows = Vec::new();
+    for o in &result.overlaps {
+        for f in &o.overlapping_files {
+            let kind = match f.overlap_kind {
+                radar::OverlapKind::SameFile => "same-file",
+                radar::OverlapKind::LineOverlap { .. } => "line-overlap",
+            };
+            rows.push(Toon::obj(vec![
+                ("branch", Toon::str(o.branch_name.clone())),
+                ("author", Toon::str(o.author.clone())),
+                ("file", Toon::str(f.file_path.clone())),
+                ("kind", Toon::str(kind)),
+            ]));
+        }
+    }
+    rows
+}
+
 pub fn handle_init_command(
     opts: RunOpts,
     remote: Option<String>,
@@ -435,6 +538,37 @@ pub fn handle_info(opts: RunOpts, edit: bool) -> Result<()> {
     print_radar_config(&final_config.radar);
     print_ci_config(&final_config.ci_check);
     print_git_info(opts)?;
+
+    // Structured result for --toon consumers.
+    report::result(Toon::obj(vec![
+        (
+            "main_branch",
+            Toon::str(final_config.main_branch_name.clone()),
+        ),
+        (
+            "issue_strategy",
+            Toon::str(format!("{:?}", final_config.issue_handling.strategy)),
+        ),
+        ("lint", Toon::Bool(final_config.lint.is_some())),
+        ("review", Toon::Bool(final_config.review.enabled)),
+        ("radar", Toon::Bool(final_config.radar.enabled)),
+        ("ci_check", Toon::Bool(final_config.ci_check.enabled)),
+        (
+            "monorepo",
+            Toon::Bool(final_config.monorepo.enabled),
+        ),
+        (
+            "remote",
+            match git::get_remote_url(opts) {
+                Ok(url) => Toon::str(url),
+                Err(_) => Toon::Null,
+            },
+        ),
+        (
+            "current_branch",
+            Toon::str(git::get_current_branch(opts).unwrap_or_default()),
+        ),
+    ]));
 
     Ok(())
 }

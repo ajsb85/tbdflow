@@ -1,4 +1,23 @@
-# [0.29.0](https://github.com/cladam/tbdflow/releases/tag/v0.29.0) (2026-06-16)
+# [0.30.0](https://github.com/ajsb85/tbdflow/releases/tag/v0.30.0) (2026-06-16)
+
+### ✨ Features
+- **(context):** add `tbdflow context` — one-shot situational awareness (branch, clean,
+  ahead/behind, unborn, stale[], trunk CI, radar overlaps[], recent commits) so agents
+  replace 3–5 calls with one. Honours `--toon`.
+- **(errors):** add a stable, machine-readable `code` field to TOON errors
+  (`missing_args`, `dirty_worktree`, `ci_failing`, `not_a_repo`, `unborn_no_commits`,
+  `branch_not_found`, `tag_exists`, `not_on_main`, `cannot_complete_main`, `git_failed`)
+  so agents branch on codes, not prose.
+- **(commit):** add `--message-file` and `--body-file` (`-` for stdin) to read the subject
+  and body from a file — removes multi-line shell-escaping friction.
+- **(toon):** emit structured results for `radar` (tabular `overlaps[]{branch,author,file,kind}`)
+  and `info` (config summary), so the read-heavy commands are machine-parseable.
+- **(claude):** add Claude Code slash commands (`/ship`, `/catchup`, `/radar`), a
+  `PreToolUse` guard hook that redirects raw `git commit|push|merge|rebase` to tbdflow
+  (override `# raw-git-ok`), and document the per-command TOON result schemas in the skill.
+
+
+# [0.29.0](https://github.com/ajsb85/tbdflow/releases/tag/v0.29.0) (2026-06-16)
 
 ### ✨ Features
 - **(output):** add `--toon` for pure machine-readable TOON output; with `--verbose` it
