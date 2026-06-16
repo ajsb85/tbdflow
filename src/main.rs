@@ -95,7 +95,11 @@ fn error_code(err: &anyhow::Error) -> Option<&'static str> {
 fn run(cli: cli::Cli, opts: RunOpts) -> anyhow::Result<()> {
     if !matches!(
         cli.command,
-        Commands::Init { .. } | Commands::Update | Commands::Completion { .. } | Commands::Doctor
+        Commands::Init { .. }
+            | Commands::Update
+            | Commands::Completion { .. }
+            | Commands::GenerateManPage
+            | Commands::Doctor
     ) && git::is_git_repository(opts).is_err()
     {
         say!(

@@ -1,3 +1,10 @@
+# [0.32.1](https://github.com/ajsb85/tbdflow/releases/tag/v0.32.1) (2026-06-16)
+
+### 🐛 Bug Fixes
+- **(man):** `generate-man-page` no longer requires being inside a git repository — it
+  generates documentation and is now exempt from the repo check (like `completion`).
+
+
 # [0.32.0](https://github.com/ajsb85/tbdflow/releases/tag/v0.32.0) (2026-06-16)
 
 ### ✨ Features

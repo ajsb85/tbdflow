@@ -786,6 +786,21 @@ fn test_commit_message_and_body_file() {
     assert!(msg.contains("second body line"));
 }
 
+/// `generate-man-page` must work outside a git repository (it generates docs).
+#[test]
+#[serial]
+fn test_generate_man_page_outside_repo() {
+    let dir = tempfile::tempdir().unwrap();
+    std::env::set_current_dir(dir.path()).unwrap();
+    let mut cmd = util::tbdflow_cmd();
+    cmd.arg("generate-man-page");
+    cmd.assert()
+        .success()
+        // troff man output: name header + a section macro (hyphens are \- escaped).
+        .stdout(contains(".TH tbdflow"))
+        .stdout(contains("A CLI tool"));
+}
+
 /// Tests that the radar command detects file-level overlaps with an active remote branch.
 #[test]
 #[serial]
