@@ -1,6 +1,7 @@
 use crate::config::{Config, DodConfig};
 use crate::git::RunOpts;
-use crate::{config, git, intent, radar, review};
+use crate::toon::Toon;
+use crate::{config, git, intent, radar, report, review};
 use anyhow::Result;
 use colored::Colorize;
 use dialoguer::{theme::ColorfulTheme, Confirm, MultiSelect};
@@ -56,7 +57,7 @@ pub fn handle_interactive_commit(
             let todo_footer = build_todo_footer(&config.checklist, &checked);
             commit_message.push_str(&todo_footer);
         } else {
-            println!("Commit aborted.");
+            crate::say!("Commit aborted.");
             return Ok(None);
         }
     }
@@ -74,7 +75,7 @@ pub fn handle_interactive_dod(config: &DodConfig) -> Result<Option<String>> {
             let todo_footer = build_todo_footer(&config.checklist, &checked);
             Ok(Some(todo_footer))
         } else {
-            println!("Commit aborted.");
+            crate::say!("Commit aborted.");
             Ok(None)
         }
     } else {
@@ -191,18 +192,18 @@ pub fn is_valid_body_lines(body: &str, config: &Config) -> bool {
 }
 
 pub fn handle_commit(opts: RunOpts, config: &Config, params: CommitParams) -> Result<()> {
-    println!("{}", "--- Committing changes ---".blue());
+    crate::say!("{}", "--- Committing changes ---".blue());
 
     // Check for conflicting flags based on issue handling strategy
     if config.issue_handling.strategy == config::IssueHandlingStrategy::CommitScope
         && params.scope.is_some()
         && params.issue.is_some()
     {
-        println!(
+        crate::say!(
                 "{}",
                 "Error: Cannot use both --scope and --issue when the 'commit-scope' strategy is active.".red()
             );
-        println!(
+        crate::say!(
             "{}",
             "Hint: To associate this commit with the issue, please provide only the --issue flag."
                 .yellow()
@@ -214,7 +215,7 @@ pub fn handle_commit(opts: RunOpts, config: &Config, params: CommitParams) -> Re
 
     // Linting based on the provided configuration
     if !is_valid_commit_type(&params.r#type, config) {
-        println!(
+        crate::say!(
             "{}",
             format!(
                 "Error: '{}' is not a valid Conventional Commit type.",
@@ -226,7 +227,7 @@ pub fn handle_commit(opts: RunOpts, config: &Config, params: CommitParams) -> Re
     }
 
     if !is_valid_issue_key(&params.issue, config)? {
-        println!(
+        crate::say!(
             "{}",
             "Issue reference is required by your .tbdflow.yml config.".red()
         );
@@ -234,13 +235,13 @@ pub fn handle_commit(opts: RunOpts, config: &Config, params: CommitParams) -> Re
     }
 
     if let Err(e) = is_valid_subject_line(&params.message, config) {
-        println!("{}", format!("Commit message subject error: {}", e).red());
+        crate::say!("{}", format!("Commit message subject error: {}", e).red());
         return Err(anyhow::anyhow!("Aborted: Invalid commit message subject."));
     }
 
     if let Some(body_text) = &params.body {
         if !is_valid_body_lines(body_text, config) {
-            println!(
+            crate::say!(
                 "{}",
                 "Commit message body contains lines that exceed the maximum length.".red()
             );
@@ -250,7 +251,7 @@ pub fn handle_commit(opts: RunOpts, config: &Config, params: CommitParams) -> Re
 
     if let Some(s) = &params.scope {
         if !is_valid_scope(&Some(s.clone()), config) {
-            println!("{}", "Scope must be lowercase.".red());
+            crate::say!("{}", "Scope must be lowercase.".red());
             return Err(anyhow::anyhow!("Aborted: Invalid commit scope."));
         }
     }
@@ -265,9 +266,18 @@ pub fn handle_commit(opts: RunOpts, config: &Config, params: CommitParams) -> Re
     let dod_config = config::load_dod_config().unwrap_or_default();
     let todo_footer_result = if params.no_verify || dod_config.checklist.is_empty() {
         Ok(Some(String::new()))
+    } else if opts.non_interactive {
+        // Can't show a checklist without a TTY: defer every item to a TODO
+        // footer so nothing is silently dropped, and record a warning.
+        report::warn("DoD checklist deferred (--non-interactive); unchecked items added as TODO footer");
+        Ok(Some(build_todo_footer(&dod_config.checklist, &[])))
     } else {
         handle_interactive_dod(&dod_config)
     };
+
+    // Capture reporting values before `params`/`header` are consumed below.
+    let report_type = params.r#type.clone();
+    let report_subject = header.clone();
 
     if let Some(todo_footer) = todo_footer_result? {
         let git_root = PathBuf::from(git::get_git_root(opts)?);
@@ -296,40 +306,65 @@ pub fn handle_commit(opts: RunOpts, config: &Config, params: CommitParams) -> Re
         }
         commit_message.push_str(&todo_footer);
 
-        println!(
+        crate::say!(
             "{}",
             format!("Commit message will be:\n---\n{}\n---", commit_message).blue()
         );
 
         if opts.verbose {
             let current_dir = std::env::current_dir()?;
-            println!("Git root: {:?}", git_root);
-            println!("Current dir: {:?}", current_dir);
-            println!("monorepo: {:?}", config.monorepo);
+            crate::say!("Git root: {:?}", git_root);
+            crate::say!("Current dir: {:?}", current_dir);
+            crate::say!("monorepo: {:?}", config.monorepo);
         }
         git::stage_scoped_changes(config, params.include_projects, opts)?;
 
         if !git::has_staged_changes(opts)? {
-            println!("{}", "No changes added to commit.".yellow());
+            crate::say!("{}", "No changes added to commit.".yellow());
             return Ok(());
         }
 
         // Radar: check for overlapping work before committing
         if !radar::check_before_commit(config, opts)? {
-            println!("{}", "Commit aborted by user.".yellow());
+            crate::say!("{}", "Commit aborted by user.".yellow());
             return Ok(());
         }
 
+        let signed = git::should_sign(opts);
         let current_branch = git::get_current_branch(opts)?;
+        let mut pushed = false;
         if current_branch == config.main_branch_name {
-            println!("--- Committing directly to main branch ---");
-            git::pull_latest_with_rebase(opts)?;
+            crate::say!("--- Committing directly to main branch ---");
+            // Unborn repo (first commit) or no upstream: don't try to pull.
+            let unborn = git::is_unborn_head(opts);
+            let upstream = git::has_upstream(opts);
+            if !unborn && upstream {
+                git::pull_latest_with_rebase(opts)?;
+            }
             git::commit(&commit_message, opts)?;
-            git::push(opts)?;
-            println!(
-                "\n{}",
-                "Successfully committed and pushed changes to main.".green()
-            );
+            if upstream {
+                git::push(opts)?;
+                pushed = true;
+            } else if git::has_origin_remote(opts) {
+                // First push on a new repo: establish the upstream.
+                git::push_set_upstream(&current_branch, opts)?;
+                pushed = true;
+            } else {
+                report::warn(
+                    "no 'origin' remote configured; commit created locally and not pushed",
+                );
+            }
+            if pushed {
+                crate::say!(
+                    "\n{}",
+                    "Successfully committed and pushed changes to main.".green()
+                );
+            } else {
+                crate::say!(
+                    "\n{}",
+                    "Committed locally. Add a remote and push when ready.".green()
+                );
+            }
 
             // Clean-up the intent log after successful push to trunk
             if intent_section.is_some() {
@@ -341,7 +376,7 @@ pub fn handle_commit(opts: RunOpts, config: &Config, params: CommitParams) -> Re
                         .filter(|n| n.snapshot_hash.is_some())
                         .count();
                     if snapshot_count > 0 {
-                        println!(
+                        crate::say!(
                             "{}",
                             format!(
                                 "Releasing {} WIP snapshot(s), your work is now in git history.",
@@ -352,7 +387,7 @@ pub fn handle_commit(opts: RunOpts, config: &Config, params: CommitParams) -> Re
                     }
                 }
                 intent::cleanup_intent_log(&git_root)?;
-                println!("{}", "Intent log consumed and cleared.".dimmed());
+                crate::say!("{}", "Intent log consumed and cleared.".dimmed());
             }
 
             // Auto-trigger review if rules match the changed files
@@ -362,24 +397,43 @@ pub fn handle_commit(opts: RunOpts, config: &Config, params: CommitParams) -> Re
                 review::trigger_review(config, None, &commit_hash, &commit_message, &author, opts)?;
             }
         } else {
-            println!("--- Committing to feature branch '{}' ---", current_branch);
+            crate::say!("--- Committing to feature branch '{}' ---", current_branch);
             git::commit(&commit_message, opts)?;
             git::push(opts)?;
-            println!(
+            pushed = true;
+            crate::say!(
                 "\n{}",
                 format!("Successfully pushed changes to '{}'.", current_branch).green()
             );
         }
 
+        let mut tagged: Option<String> = None;
         if let Some(tag_name) = params.tag {
             let commit_hash = git::get_head_commit_hash(opts)?;
             git::create_tag(&tag_name, &commit_message, &commit_hash, opts)?;
             git::push_tags(opts)?;
-            println!(
+            crate::say!(
                 "{}",
                 format!("Success! Created and pushed tag '{}'", tag_name).green()
             );
+            tagged = Some(tag_name);
         }
+
+        // Structured result for --toon consumers.
+        let sha = git::get_head_commit_hash(opts).unwrap_or_default();
+        let short = sha[..std::cmp::min(7, sha.len())].to_string();
+        let mut result = vec![
+            ("subject".to_string(), Toon::str(report_subject)),
+            ("type".to_string(), Toon::str(report_type)),
+            ("branch".to_string(), Toon::str(current_branch)),
+            ("sha".to_string(), Toon::str(short)),
+            ("signed".to_string(), Toon::Bool(signed)),
+            ("pushed".to_string(), Toon::Bool(pushed)),
+        ];
+        if let Some(t) = tagged {
+            result.push(("tag".to_string(), Toon::str(t)));
+        }
+        report::result(Toon::Obj(result));
     }
     Ok(())
 }

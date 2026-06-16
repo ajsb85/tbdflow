@@ -40,6 +40,18 @@ pub fn setup_temp_git_repo() -> (TempDir, TempDir, std::path::PathBuf) {
         .current_dir(&repo_path)
         .output()
         .unwrap();
+    // Keep tests deterministic and offline: never GPG-sign in the test repo,
+    // regardless of the developer's global git signing config.
+    Command::new("git")
+        .args(&["config", "commit.gpgsign", "false"])
+        .current_dir(&repo_path)
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(&["config", "tag.gpgsign", "false"])
+        .current_dir(&repo_path)
+        .output()
+        .unwrap();
     let file_path = repo_path.join("README.md");
     write(&file_path, "test").unwrap();
     Command::new("git")

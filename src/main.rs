@@ -7,50 +7,91 @@ use tbdflow::cli::TaskAction;
 use tbdflow::commit::CommitParams;
 use tbdflow::git::get_current_branch;
 use tbdflow::git::RunOpts;
+use tbdflow::toon::Toon;
 use tbdflow::{
-    branch, changelog, cli, commands, commit, config, git, intent, radar, recover, review, wizard,
+    branch, changelog, cli, commands, commit, config, git, intent, radar, recover, report, review,
+    say, wizard,
 };
 
 fn main() -> anyhow::Result<()> {
     let cli = cli::Cli::parse();
-    let verbose = cli.verbose;
-    let dry_run = cli.dry_run;
-    let opts = RunOpts::new(verbose, dry_run);
+    let opts = RunOpts::with_flags(
+        cli.verbose,
+        cli.dry_run,
+        cli.toon,
+        cli.non_interactive,
+        cli.no_sign,
+    );
+    report::init(cli.toon, cli.command.name());
 
+    let result = run(cli, opts);
+
+    match &result {
+        Ok(()) => report::flush(true, None),
+        Err(e) => report::flush(false, Some(format!("{:#}", e))),
+    }
+    result
+}
+
+/// Error returned when an interactive wizard would be needed but the user passed
+/// `--non-interactive`. Mirrors the style of the `gh` CLI.
+fn non_interactive_error(needs: &str) -> anyhow::Error {
+    anyhow::anyhow!(
+        "{} when running with --non-interactive (interactive wizard disabled)",
+        needs
+    )
+}
+
+fn run(cli: cli::Cli, opts: RunOpts) -> anyhow::Result<()> {
     if !matches!(
         cli.command,
-        Commands::Init | Commands::Update | Commands::Completion { .. }
+        Commands::Init { .. } | Commands::Update | Commands::Completion { .. } | Commands::Doctor
     ) && git::is_git_repository(opts).is_err()
     {
-        println!(
+        say!(
             "{}",
             "Error: Not a git repository (or any of the parent directories).".red()
         );
-        println!("Hint: Run 'tbdflow init' to initialise a new repository here.");
-        std::process::exit(1);
+        say!("Hint: Run 'tbdflow init' to initialise a new repository here.");
+        return Err(anyhow::anyhow!(
+            "not a git repository; run 'tbdflow init' first"
+        ));
     }
 
     let config = config::load_tbdflow_config()?;
 
     match cli.command {
-        Commands::Init => {
-            commands::handle_init_command(opts)?;
+        Commands::Init {
+            remote,
+            create_remote,
+            private,
+            push,
+        } => {
+            commands::handle_init_command(opts, remote, create_remote, private, push)?;
         }
         Commands::Info { edit } => {
             commands::handle_info(opts, edit)?;
         }
+        Commands::Doctor => {
+            commands::handle_doctor(opts, &config)?;
+        }
         Commands::Config { get_dod } => {
             if get_dod {
                 if let Ok(dod_config) = config::load_dod_config() {
-                    for item in dod_config.checklist {
-                        println!("{}", item);
+                    let mut items = Vec::new();
+                    for item in &dod_config.checklist {
+                        say!("{}", item);
+                        items.push(Toon::str(item.clone()));
                     }
+                    report::result(Toon::obj(vec![("dod", Toon::Arr(items))]));
                 }
             }
         }
         Commands::HeadSha => {
             let sha = git::get_head_commit_hash(opts)?;
-            println!("{}", &sha[..std::cmp::min(7, sha.len())]);
+            let short = sha[..std::cmp::min(7, sha.len())].to_string();
+            say!("{}", short);
+            report::result(Toon::obj(vec![("sha", Toon::str(short))]));
         }
         Commands::Update => {
             commands::handle_update_command()?;
@@ -81,6 +122,9 @@ fn main() -> anyhow::Result<()> {
                     no_verify,
                 },
                 _ => {
+                    if opts.non_interactive {
+                        return Err(non_interactive_error("--type and --message are required"));
+                    }
                     let w = wizard::run_commit_wizard(&config)?;
                     CommitParams {
                         r#type: w.r#type,
@@ -106,7 +150,9 @@ fn main() -> anyhow::Result<()> {
             from_commit,
         } => {
             if r#type.is_none() || name.is_none() {
-                // Enter interactive wizard mode
+                if opts.non_interactive {
+                    return Err(non_interactive_error("--type and --name are required"));
+                }
                 let wizard_result = wizard::run_branch_wizard(&config)?;
                 branch::handle_branch(
                     Some(wizard_result.branch_type),
@@ -125,6 +171,9 @@ fn main() -> anyhow::Result<()> {
                 branch::handle_complete(t, n, &config, opts)?;
             }
             _ => {
+                if opts.non_interactive {
+                    return Err(non_interactive_error("--type and --name are required"));
+                }
                 let wizard_result = wizard::run_complete_wizard(&config)?;
                 branch::handle_complete(
                     wizard_result.branch_type,
@@ -141,39 +190,42 @@ fn main() -> anyhow::Result<()> {
             radar::handle_radar(opts, &config)?;
         }
         Commands::Status => {
-            println!("--- Checking status ---");
+            say!("--- Checking status ---");
             let status_output = git::get_scoped_status(&config, opts)?;
 
             if status_output.is_empty() {
-                println!("{}", "Working directory is clean.".green());
+                say!("{}", "Working directory is clean.".green());
             } else {
-                println!("{}", status_output.yellow());
+                say!("{}", status_output.yellow());
             }
+            report::result(Toon::obj(vec![
+                ("clean", Toon::Bool(status_output.is_empty())),
+                ("status", Toon::str(status_output)),
+            ]));
         }
         Commands::CurrentBranch => {
-            println!("{}", "--- Current branch ---".to_string().blue());
+            say!("{}", "--- Current branch ---".to_string().blue());
             let branch_name = get_current_branch(opts)?;
-            println!("{}", format!("Current branch is: {}", branch_name).green());
+            say!("{}", format!("Current branch is: {}", branch_name).green());
+            report::result(Toon::obj(vec![("branch", Toon::str(branch_name))]));
         }
         Commands::CheckBranches => {
             commands::handle_check_branches(opts, &config)?;
         }
         Commands::GenerateManPage => {
-            println!("{}", "--- Generating a man page ---".to_string().blue());
+            // Raw generator output; bypasses TOON/human routing intentionally.
             let mut cmd = cli::Cli::command();
             let mut buffer: Vec<u8> = Default::default();
-            // Render the main command sections
             let man = clap_mangen::Man::new(cmd.clone());
             man.render(&mut buffer)?;
             writeln!(buffer, "\n--------------------------------------------------------------------------------\n")?;
-
-            // Manually render each subcommand's details into the same buffer
             for sub in cmd.get_subcommands_mut() {
                 commands::render_manpage_section(sub, &mut buffer)?;
             }
             io::stdout().write_all(&buffer)?;
         }
         Commands::Completion { shell } => {
+            // Raw generator output; bypasses TOON/human routing intentionally.
             let mut cmd = cli::Cli::command();
             let bin_name = cmd.get_name().to_string();
             clap_complete::generate(shell, &mut cmd, bin_name, &mut io::stdout());
@@ -183,35 +235,33 @@ fn main() -> anyhow::Result<()> {
             to,
             unreleased,
         } => {
-            if from.is_none() && to.is_none() && !unreleased {
-                // Enter interactive wizard mode
+            let changelog = if from.is_none() && to.is_none() && !unreleased {
+                if opts.non_interactive {
+                    return Err(non_interactive_error(
+                        "--unreleased or --from/--to are required",
+                    ));
+                }
                 let wizard_result = wizard::run_changelog_wizard()?;
-                let changelog = changelog::handle_changelog(
+                changelog::handle_changelog(
                     opts,
                     &config,
                     wizard_result.from,
                     wizard_result.to,
                     wizard_result.unreleased,
-                )?;
-                if changelog.is_empty() {
-                    println!(
-                        "{}",
-                        "No conventional commits found in the specified range.".yellow()
-                    );
-                } else {
-                    println!("{}", changelog);
-                }
+                )?
             } else {
-                let changelog = changelog::handle_changelog(opts, &config, from, to, unreleased)?;
-                if changelog.is_empty() {
-                    println!(
-                        "{}",
-                        "No conventional commits found in the specified range.".yellow()
-                    );
-                } else {
-                    println!("{}", changelog);
-                }
+                changelog::handle_changelog(opts, &config, from, to, unreleased)?
+            };
+
+            if changelog.is_empty() {
+                say!(
+                    "{}",
+                    "No conventional commits found in the specified range.".yellow()
+                );
+            } else {
+                say!("{}", changelog);
             }
+            report::result(Toon::obj(vec![("changelog", Toon::str(changelog))]));
         }
         Commands::Undo { sha, no_push } => {
             commands::handle_undo(&sha, no_push, opts, &config)?;
@@ -230,14 +280,14 @@ fn main() -> anyhow::Result<()> {
                     &current_branch,
                     snapshot_hash.clone(),
                 )?;
-                println!("{}", format!("Note recorded: \"{}\"", msg).green());
+                say!("{}", format!("Note recorded: \"{}\"", msg).green());
+                let mut fields = vec![("note".to_string(), Toon::str(msg))];
                 if let Some(hash) = snapshot_hash {
-                    println!(
-                        "{}",
-                        format!("WIP snapshot: {}", &hash[..std::cmp::min(10, hash.len())])
-                            .dimmed()
-                    );
+                    let short = hash[..std::cmp::min(10, hash.len())].to_string();
+                    say!("{}", format!("WIP snapshot: {}", short).dimmed());
+                    fields.push(("snapshot".to_string(), Toon::str(short)));
                 }
+                report::result(Toon::Obj(fields));
             } else {
                 intent::show_intent_log(&git_root, Some(&current_branch))?;
             }
@@ -248,19 +298,24 @@ fn main() -> anyhow::Result<()> {
             match action {
                 TaskAction::Start { description } => {
                     intent::start_task(&git_root, &description, &current_branch)?;
-                    println!("{}", format!("Task started: \"{}\"", description).green());
-                    println!(
+                    say!("{}", format!("Task started: \"{}\"", description).green());
+                    say!(
                         "{}",
                         "Use 'tbdflow +' or 'tbdflow note' to log your thoughts as you work."
                             .dimmed()
                     );
+                    report::result(Toon::obj(vec![
+                        ("task", Toon::str(description)),
+                        ("started", Toon::Bool(true)),
+                    ]));
                 }
                 TaskAction::Show => {
                     intent::show_intent_log(&git_root, Some(&current_branch))?;
                 }
                 TaskAction::Clear => {
                     intent::cleanup_intent_log(&git_root)?;
-                    println!("{}", "Intent log cleared.".green());
+                    say!("{}", "Intent log cleared.".green());
+                    report::result(Toon::obj(vec![("cleared", Toon::Bool(true))]));
                 }
             }
         }

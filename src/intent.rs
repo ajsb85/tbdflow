@@ -135,7 +135,7 @@ pub fn check_branch(log: &IntentLog, current_branch: &str) -> BranchCheck {
 }
 
 pub fn warn_stale(log_branch: &str, current_branch: &str) {
-    println!(
+    crate::say!(
         "{}",
         format!(
             "Stale intent log detected: notes were captured on '{}', but you are now on '{}'.",
@@ -143,7 +143,7 @@ pub fn warn_stale(log_branch: &str, current_branch: &str) {
         )
         .yellow()
     );
-    println!(
+    crate::say!(
         "{}",
         "Use 'tbdflow task clear' to discard, or switch back to the original branch.".yellow()
     );
@@ -194,7 +194,7 @@ pub fn start_task(git_root: &Path, description: &str, current_branch: &str) -> R
             {
                 warn_stale(&log_branch, &cur);
             }
-            println!(
+            crate::say!(
                 "{}",
                 format!(
                     "Warning: Existing intent log has {} note(s). They will be preserved.",
@@ -260,18 +260,18 @@ pub fn show_intent_log(git_root: &Path, current_branch: Option<&str>) -> Result<
                 }
             }
             if let Some(task) = &log.task {
-                println!("{} {}", "Task:".blue().bold(), task);
+                crate::say!("{} {}", "Task:".blue().bold(), task);
             }
             if let Some(branch) = &log.branch {
-                println!("{} {}", "Branch:".blue().bold(), branch);
+                crate::say!("{} {}", "Branch:".blue().bold(), branch);
             }
-            println!("{} {}", "Started:".blue().bold(), log.started_at);
+            crate::say!("{} {}", "Started:".blue().bold(), log.started_at);
             if log.notes.is_empty() {
-                println!("{}", "No notes recorded yet.".dimmed());
+                crate::say!("{}", "No notes recorded yet.".dimmed());
             } else {
-                println!("{} {} note(s)", "Notes:".blue().bold(), log.notes.len());
+                crate::say!("{} {} note(s)", "Notes:".blue().bold(), log.notes.len());
                 for (i, note) in log.notes.iter().enumerate() {
-                    println!(
+                    crate::say!(
                         "  {}. {} {}",
                         i + 1,
                         note.message,
@@ -281,7 +281,7 @@ pub fn show_intent_log(git_root: &Path, current_branch: Option<&str>) -> Result<
             }
         }
         None => {
-            println!(
+            crate::say!(
                 "{}",
                 "No active intent log. Use 'tbdflow task start' or 'tbdflow +' to begin.".dimmed()
             );

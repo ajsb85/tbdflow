@@ -14,7 +14,7 @@ tags:
 
 ## Overview
 
-This skill enables an AI agent to manage a **Trunk-Based Development (TBD)** workflow using the `tbdflow` CLI (v0.18.2).
+This skill enables an AI agent to manage a **Trunk-Based Development (TBD)** workflow using the `tbdflow` CLI (v0.29.0).
 
 The skill exists to:
 
@@ -24,6 +24,26 @@ The skill exists to:
 - Maintain a fast, safe path back to trunk (`main`)
 
 `tbdflow` is the **only interface** the agent should use for Git workflow actions covered by this skill.
+
+## Agent invocation (non-interactive + machine output)
+
+When driving `tbdflow` programmatically (Claude Code, CI), pass these **global flags**
+before the subcommand:
+
+- `--non-interactive` — disables all wizards/prompts. Missing required input becomes a
+  clear error instead of hanging on a TTY prompt.
+- `--toon` — emits one machine-readable TOON document (`command`, `ok`, `result`,
+  `warnings`, `error`); human prose is suppressed. Add `--verbose` to capture the git/gh
+  command `trace[]`.
+- `--no-sign` — skip GPG signing for this call (signing is otherwise automatic when a
+  signing key is configured).
+
+```bash
+tbdflow --non-interactive --toon commit -t fix -s login -m "resolve timeout"
+tbdflow --toon doctor      # preflight: git / gh auth / gpg signing / config
+```
+
+Run `tbdflow --toon doctor` once as a preflight and surface any failing checks.
 
 ---
 

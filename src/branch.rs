@@ -1,6 +1,7 @@
 use crate::config::Config;
 use crate::git::{GitError, RunOpts};
-use crate::{commands, config, git, intent};
+use crate::toon::Toon;
+use crate::{commands, config, git, intent, report};
 use anyhow::Result;
 use colored::Colorize;
 use std::path::PathBuf;
@@ -17,7 +18,7 @@ pub fn handle_branch(
     from_commit: Option<String>,
     opts: RunOpts,
 ) -> Result<()> {
-    println!(
+    crate::say!(
         "{}",
         "--- Creating short-lived branch ---".to_string().blue()
     );
@@ -35,20 +36,32 @@ pub fn handle_branch(
         }
     };
 
+    // Best practice: a short-lived branch must fork from real history. An unborn
+    // repository has no commit to branch from yet.
+    if git::is_unborn_head(opts) {
+        return Err(anyhow::anyhow!(
+            "repository has no commits yet; make an initial commit (e.g. 'tbdflow commit -t chore -m \"init\"') before creating a branch"
+        ));
+    }
+
     git::is_working_directory_clean(opts)?;
     git::checkout_main(opts, main_branch_name)?;
     git::pull_latest_with_rebase(opts)?;
     git::create_branch(&branch_name, from_commit.as_deref(), opts)?;
     git::push_set_upstream(&branch_name, opts)?;
-    println!(
+    crate::say!(
         "\n{}",
         format!("Success! Switched to new branch: '{}'", branch_name).green()
     );
+    report::result(Toon::obj(vec![
+        ("branch", Toon::str(branch_name)),
+        ("created", Toon::Bool(true)),
+    ]));
     Ok(())
 }
 
 pub fn handle_complete(r#type: String, name: String, config: &Config, opts: RunOpts) -> Result<()> {
-    println!(
+    crate::say!(
         "{}",
         "--- Completing short-lived branch ---".to_string().blue()
     );
@@ -60,7 +73,7 @@ pub fn handle_complete(r#type: String, name: String, config: &Config, opts: RunO
     }
 
     let branch_name = git::find_branch(&name, &r#type, config, opts)?;
-    println!("{}", format!("Branch to complete: {}", branch_name).blue());
+    crate::say!("{}", format!("Branch to complete: {}", branch_name).blue());
 
     git::branch_exists_locally(&branch_name, opts)?;
 
@@ -86,7 +99,7 @@ pub fn handle_complete(r#type: String, name: String, config: &Config, opts: RunO
             &merge_commit_hash,
             opts,
         )?;
-        println!(
+        crate::say!(
             "{}",
             format!("Created tag '{}' on merge commit.", tag_name).green()
         );
@@ -104,10 +117,10 @@ pub fn handle_complete(r#type: String, name: String, config: &Config, opts: RunO
     let git_root = PathBuf::from(git::get_git_root(opts)?);
     if intent::load_intent_log(&git_root)?.is_some() {
         intent::cleanup_intent_log(&git_root)?;
-        println!("{}", "Intent log cleared after branch completion.".dimmed());
+        crate::say!("{}", "Intent log cleared after branch completion.".dimmed());
     }
 
-    println!(
+    crate::say!(
         "\n{}",
         format!(
             "Success! Branch '{}' was merged into main and deleted.",
@@ -115,5 +128,10 @@ pub fn handle_complete(r#type: String, name: String, config: &Config, opts: RunO
         )
         .green()
     );
+    report::result(Toon::obj(vec![
+        ("branch", Toon::str(branch_name)),
+        ("merged", Toon::Bool(true)),
+        ("deleted", Toon::Bool(true)),
+    ]));
     Ok(())
 }

@@ -1,3 +1,26 @@
+# [0.29.0](https://github.com/cladam/tbdflow/releases/tag/v0.29.0) (2026-06-16)
+
+### ✨ Features
+- **(output):** add `--toon` for pure machine-readable TOON output; with `--verbose` it
+  captures the git/gh command `trace[]`. New `toon` encoder and `report` output layer.
+- **(agents):** add `--non-interactive` — disables all wizards/prompts and turns missing
+  required input into clear errors (like `gh`), so AI agents and CI never hang on a TTY.
+- **(signing):** GPG-sign commits (`-S`) and tags (`-u`/`-s`) automatically when a signing
+  key is configured; honour `commit.gpgsign`; `--no-sign` opts out. Sets `GPG_TTY` for agents.
+- **(doctor):** add `tbdflow doctor` — preflight checks for git, `gh` (installed + auth),
+  GPG signing, and config; honours `--toon`.
+- **(init):** support bootstrapping unborn repositories: `--non-interactive` init, `--remote`
+  linking, and `--create-remote owner/name [--private] [--push]` via the `gh` CLI; names the
+  trunk `main` from the start.
+- **(unborn):** first commit on an unborn branch skips the pre-pull and sets upstream on push;
+  `branch` is guarded until the first commit exists.
+- add a Claude Code skill at `.claude/skills/tbdflow/` and document the new agent flags.
+
+### ⚙️ Maintenance
+- centralise GitHub CLI access in a new `gh` module (deduplicates `is_gh_cli_available` and
+  the CI-status check).
+
+
 # [0.28.0](https://github.com/cladam/tbdflow/releases/tag/v0.28.0) (2026-04-18)
 
 ### ✨ Features

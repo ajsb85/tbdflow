@@ -1,6 +1,6 @@
 use crate::config::{Config, RadarLevel, RadarOnCommit};
 use crate::git::RunOpts;
-use crate::{git, intent};
+use crate::{git, intent, report};
 use anyhow::Result;
 use chrono::Utc;
 use colored::*;
@@ -90,7 +90,7 @@ fn print_trunk_status(status: &TrunkStatus, main_branch: &str) {
         .unwrap_or_default();
 
     let line = format!("{} is {}{}", main_branch, label, detail);
-    println!("{}", colour_fn(&line));
+    crate::say!("{}", colour_fn(&line));
 }
 
 // max 5 files latest 72 hours
@@ -104,11 +104,11 @@ pub fn get_hotspots(config: &Config, opts: RunOpts) -> Result<Vec<Hotspot>> {
 
 fn print_hotspots(hotspots: &[Hotspot]) {
     if hotspots.is_empty() {
-        println!("{}", "No file changes in the last 3 days.".dimmed());
+        crate::say!("{}", "No file changes in the last 3 days.".dimmed());
     } else {
         for (file, count) in hotspots {
             let label = if *count == 1 { "change" } else { "changes" };
-            println!(
+            crate::say!(
                 "  {} ({} {})",
                 file.bold(),
                 count.to_string().yellow(),
@@ -123,7 +123,7 @@ pub fn scan(config: &Config, opts: RunOpts) -> Result<RadarResult> {
     let main_branch = &config.main_branch_name;
 
     if opts.verbose {
-        println!("{}", "[RADAR] Fetching latest from origin...".dimmed());
+        crate::say!("{}", "[RADAR] Fetching latest from origin...".dimmed());
     }
     git::fetch_origin(opts)?;
 
@@ -248,26 +248,26 @@ fn should_ignore(file: &str, patterns: &[String]) -> bool {
 }
 
 pub fn handle_radar(opts: RunOpts, config: &Config) -> Result<()> {
-    println!("{}", "--- Trunk Status ---".blue());
+    crate::say!("{}", "--- Trunk Status ---".blue());
     let trunk = get_trunk_status(config, opts);
     print_trunk_status(&trunk, &config.main_branch_name);
 
-    println!(
+    crate::say!(
         "\n{}",
         format!("--- Hotspots (Last {} days) ---", CHURN_HOURS / 24).blue()
     );
 
     if opts.verbose {
-        println!("{}", "[RADAR] Fetching latest from origin...".dimmed());
+        crate::say!("{}", "[RADAR] Fetching latest from origin...".dimmed());
     }
     git::fetch_origin(opts)?;
     let hotspots = get_hotspots(config, opts)?;
     print_hotspots(&hotspots);
 
-    println!("\n{}", "--- Scanning for overlapping work ---".blue());
+    crate::say!("\n{}", "--- Scanning for overlapping work ---".blue());
 
     if !config.radar.enabled {
-        println!(
+        crate::say!(
             "{}",
             "Radar is disabled. Enable it in .tbdflow.yml with:\n\n  radar:\n    enabled: true"
                 .yellow()
@@ -275,21 +275,21 @@ pub fn handle_radar(opts: RunOpts, config: &Config) -> Result<()> {
         return Ok(());
     }
 
-    println!("Fetching latest from origin...");
+    crate::say!("Fetching latest from origin...");
     let result = scan(config, opts)?;
 
     if result.local_files_count == 0 {
-        println!("{}", "No local changes detected. Nothing to scan.".green());
+        crate::say!("{}", "No local changes detected. Nothing to scan.".green());
         return Ok(());
     }
 
-    println!(
+    crate::say!(
         "Scanned {} active branch(es) against {} local file(s).\n",
         result.branches_scanned, result.local_files_count
     );
 
     if result.overlaps.is_empty() {
-        println!(
+        crate::say!(
             "{}",
             format!(
                 "No overlaps detected across {} active branch(es). You're clear!",
@@ -298,7 +298,7 @@ pub fn handle_radar(opts: RunOpts, config: &Config) -> Result<()> {
             .green()
         );
     } else {
-        println!(
+        crate::say!(
             "{}",
             format!(
                 "OVERLAP DETECTED with {} active branch(es):\n",
@@ -314,7 +314,7 @@ pub fn handle_radar(opts: RunOpts, config: &Config) -> Result<()> {
 
         let clean_count = result.branches_scanned - result.overlaps.len();
         if clean_count > 0 {
-            println!(
+            crate::say!(
                 "{}",
                 format!(
                     "  {} other active branch(es) have no overlap with your changes.",
@@ -324,7 +324,7 @@ pub fn handle_radar(opts: RunOpts, config: &Config) -> Result<()> {
             );
         }
 
-        println!(
+        crate::say!(
             "\n{}",
             "Hint: Coordinate with the overlapping author(s) before pushing. Consider syncing more frequently."
                 .dimmed()
@@ -380,7 +380,7 @@ fn radar_snapshot(opts: RunOpts) {
                     eprintln!("Radar snapshot save failed: {e}");
                 }
             } else if opts.verbose {
-                println!(
+                crate::say!(
                     "{}",
                     format!("Radar snapshot: {}", &hash[..std::cmp::min(10, hash.len())]).dimmed()
                 );
@@ -397,7 +397,7 @@ fn radar_snapshot(opts: RunOpts) {
 
 /// Print a single branch overlap in a tree-like format.
 fn print_branch_overlap(overlap: &BranchOverlap) {
-    println!(
+    crate::say!(
         "  {} (by {}, {} commit(s) ahead)",
         overlap.branch_name.bold(),
         format!("@{}", overlap.author).cyan(),
@@ -428,12 +428,12 @@ fn print_branch_overlap(overlap: &BranchOverlap) {
             OverlapKind::SameFile => String::new(),
         };
 
-        println!(
+        crate::say!(
             "  {} {}    {}{}",
             connector, file_overlap.file_path, indicator, detail
         );
     }
-    println!();
+    crate::say!("");
 }
 
 /// Format hunk ranges into a human-readable string like "14-28, 42-50".
@@ -497,14 +497,14 @@ pub fn check_before_commit(config: &Config, opts: RunOpts) -> Result<bool> {
     }
 
     // Print warnings
-    println!("\n{}", "Radar detected overlapping work:".yellow().bold());
+    crate::say!("\n{}", "Radar detected overlapping work:".yellow().bold());
     for overlap in &result.overlaps {
         for file_overlap in &overlap.overlapping_files {
             let indicator = match &file_overlap.overlap_kind {
                 OverlapKind::LineOverlap { .. } => "[!!]",
                 OverlapKind::SameFile => "[!]",
             };
-            println!(
+            crate::say!(
                 "  {} {} — @{} on {}",
                 indicator, file_overlap.file_path, overlap.author, overlap.branch_name
             );
@@ -513,10 +513,15 @@ pub fn check_before_commit(config: &Config, opts: RunOpts) -> Result<bool> {
 
     match config.radar.on_commit {
         RadarOnCommit::Warn => {
-            println!("{}", "  Consider coordinating before pushing.\n".dimmed());
+            crate::say!("{}", "  Consider coordinating before pushing.\n".dimmed());
             Ok(true)
         }
         RadarOnCommit::Confirm => {
+            if opts.non_interactive {
+                // Never block an agent: downgrade 'confirm' to a warning.
+                report::warn("radar detected overlapping work (proceeding; --non-interactive)");
+                return Ok(true);
+            }
             let proceed =
                 dialoguer::Confirm::with_theme(&dialoguer::theme::ColorfulTheme::default())
                     .with_prompt("Overlapping work detected. Continue with commit?")

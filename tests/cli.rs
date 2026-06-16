@@ -1,5 +1,6 @@
 use assert_cmd::Command;
 use chrono::{Duration, Utc};
+use predicates::prelude::*;
 use predicates::str::contains;
 use predicates::str::is_match;
 use serial_test::serial;
@@ -596,6 +597,131 @@ automatic_tags:
     cmd.assert()
         .success()
         .stdout(contains("No overlaps detected"));
+}
+
+/// Non-interactive commit without required args must fail with a clear message
+/// instead of dropping into the interactive wizard.
+#[test]
+#[serial]
+fn test_non_interactive_commit_requires_args() {
+    let (_dir, _bare_dir, repo_path) = setup_temp_git_repo();
+    std::env::set_current_dir(&repo_path).unwrap();
+
+    let mut cmd = Command::cargo_bin("tbdflow").unwrap();
+    cmd.arg("--non-interactive").arg("commit");
+    cmd.assert()
+        .failure()
+        .stderr(contains("--type and --message are required"));
+}
+
+/// Non-interactive branch without required args must fail clearly.
+#[test]
+#[serial]
+fn test_non_interactive_branch_requires_args() {
+    let (_dir, _bare_dir, repo_path) = setup_temp_git_repo();
+    std::env::set_current_dir(&repo_path).unwrap();
+
+    let mut cmd = Command::cargo_bin("tbdflow").unwrap();
+    cmd.arg("--non-interactive").arg("branch");
+    cmd.assert()
+        .failure()
+        .stderr(contains("--type and --name are required"));
+}
+
+/// `--toon` emits a pure TOON document (no human decoration lines).
+#[test]
+#[serial]
+fn test_toon_status_output() {
+    let (_dir, _bare_dir, repo_path) = setup_temp_git_repo();
+    std::env::set_current_dir(&repo_path).unwrap();
+
+    let mut cmd = Command::cargo_bin("tbdflow").unwrap();
+    cmd.arg("--toon").arg("status");
+    cmd.assert()
+        .success()
+        .stdout(contains("command: status"))
+        .stdout(contains("ok: true"))
+        .stdout(contains("clean: true"))
+        // Human decoration must NOT appear in TOON mode.
+        .stdout(contains("Checking status").not());
+}
+
+/// `--toon --verbose` captures the git command trace as a tabular array.
+#[test]
+#[serial]
+fn test_toon_verbose_trace() {
+    let (_dir, _bare_dir, repo_path) = setup_temp_git_repo();
+    std::env::set_current_dir(&repo_path).unwrap();
+
+    let mut cmd = Command::cargo_bin("tbdflow").unwrap();
+    cmd.arg("--toon").arg("--verbose").arg("status");
+    cmd.assert()
+        .success()
+        .stdout(is_match(r"trace\[\d+\]\{tool,args,dry_run\}:").unwrap());
+}
+
+/// `doctor` reports a healthy environment in a valid repo and honours --toon.
+#[test]
+#[serial]
+fn test_doctor_toon_output() {
+    let (_dir, _bare_dir, repo_path) = setup_temp_git_repo();
+    std::env::set_current_dir(&repo_path).unwrap();
+
+    let mut cmd = Command::cargo_bin("tbdflow").unwrap();
+    cmd.arg("--toon").arg("doctor");
+    cmd.assert()
+        .success()
+        .stdout(contains("command: doctor"))
+        .stdout(contains("git-repo,true"));
+}
+
+/// A first commit on an unborn repository succeeds without attempting a pull,
+/// and reports that it was committed (no remote => not pushed).
+#[test]
+#[serial]
+fn test_unborn_first_commit() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo_path = dir.path().to_path_buf();
+    std::process::Command::new("git")
+        .arg("init")
+        .env("GIT_CONFIG_COUNT", "1")
+        .env("GIT_CONFIG_KEY_0", "init.defaultBranch")
+        .env("GIT_CONFIG_VALUE_0", "main")
+        .current_dir(&repo_path)
+        .output()
+        .unwrap();
+    for (k, v) in [
+        ("user.email", "test@example.com"),
+        ("user.name", "Test"),
+        ("commit.gpgsign", "false"),
+    ] {
+        std::process::Command::new("git")
+            .args(["config", k, v])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+    }
+    std::fs::write(repo_path.join("README.md"), "hello").unwrap();
+    std::env::set_current_dir(&repo_path).unwrap();
+
+    let mut cmd = Command::cargo_bin("tbdflow").unwrap();
+    cmd.arg("--non-interactive")
+        .arg("commit")
+        .arg("-t")
+        .arg("chore")
+        .arg("-m")
+        .arg("initial setup");
+    cmd.assert()
+        .success()
+        .stdout(contains("Committed locally").or(contains("Successfully")));
+
+    // A commit now exists on main.
+    let log = std::process::Command::new("git")
+        .args(["log", "--oneline"])
+        .current_dir(&repo_path)
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&log.stdout).contains("initial setup"));
 }
 
 /// Tests that the radar command detects file-level overlaps with an active remote branch.

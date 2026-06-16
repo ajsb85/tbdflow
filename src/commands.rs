@@ -1,5 +1,6 @@
 use crate::git::RunOpts;
-use crate::{config, git, intent, radar};
+use crate::toon::Toon;
+use crate::{config, gh, git, intent, radar, report};
 use anyhow::Result;
 use clap::Command as Commands;
 use colored::*;
@@ -9,7 +10,7 @@ use std::fs;
 use std::path::PathBuf;
 
 pub fn handle_update_command() -> Result<(), anyhow::Error> {
-    println!("{}", "--- Checking for updates ---".blue());
+    crate::say!("{}", "--- Checking for updates ---".blue());
     let status = self_update::backends::github::Update::configure()
         .repo_owner("cladam")
         .repo_name("tbdflow")
@@ -19,31 +20,243 @@ pub fn handle_update_command() -> Result<(), anyhow::Error> {
         .build()?
         .update()?;
 
-    println!("Update status: `{}`!", status.version());
+    crate::say!("Update status: `{}`!", status.version());
     if status.updated() {
-        println!("{}", "Successfully updated tbdflow!".green());
+        crate::say!("{}", "Successfully updated tbdflow!".green());
     } else {
-        println!("{}", "tbdflow is already up to date.".green());
+        crate::say!("{}", "tbdflow is already up to date.".green());
     }
     Ok(())
 }
 
-pub fn handle_init_command(opts: RunOpts) -> Result<()> {
-    println!("--- Initialising tbdflow configuration ---");
+/// A single environment check produced by `tbdflow doctor`.
+struct Check {
+    name: String,
+    ok: bool,
+    detail: String,
+}
 
+fn bin_available(bin: &str) -> bool {
+    std::process::Command::new(bin)
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// Verifies the environment tbdflow relies on: git, the GitHub CLI (installed +
+/// authenticated), GPG signing, and the loaded configuration.
+pub fn handle_doctor(opts: RunOpts, config: &config::Config) -> Result<()> {
+    crate::say!("{}", "--- tbdflow doctor ---".blue());
+    let mut checks: Vec<Check> = Vec::new();
+
+    // git
+    let git_ok = bin_available("git");
+    checks.push(Check {
+        name: "git".into(),
+        ok: git_ok,
+        detail: if git_ok {
+            "installed".into()
+        } else {
+            "not found on PATH".into()
+        },
+    });
+
+    let in_repo = git::is_git_repository(opts).is_ok();
+    checks.push(Check {
+        name: "git-repo".into(),
+        ok: in_repo,
+        detail: if in_repo {
+            "inside a work tree".into()
+        } else {
+            "not a git repository (run 'tbdflow init')".into()
+        },
+    });
+
+    if in_repo {
+        let unborn = git::is_unborn_head(opts);
+        checks.push(Check {
+            // Informational: an unborn repo is a valid starting state, not a fault.
+            name: "commits".into(),
+            ok: true,
+            detail: if unborn {
+                "unborn branch (no commits yet) — run 'tbdflow commit' to start".into()
+            } else {
+                "has history".into()
+            },
+        });
+    }
+
+    // gh CLI
+    let gh_ok = gh::available();
+    checks.push(Check {
+        name: "gh".into(),
+        ok: gh_ok,
+        detail: if gh_ok {
+            "installed".into()
+        } else {
+            "not found (review/CI features limited)".into()
+        },
+    });
+    if gh_ok {
+        let auth = gh::auth_ok(opts);
+        checks.push(Check {
+            name: "gh-auth".into(),
+            ok: auth,
+            detail: if auth {
+                "authenticated".into()
+            } else {
+                "not authenticated (run 'gh auth login')".into()
+            },
+        });
+    }
+
+    // gpg signing
+    let gpg_ok = bin_available("gpg");
+    let key = git::signing_key(opts);
+    match (&key, gpg_ok) {
+        (Some(k), true) => {
+            let secret_present = std::process::Command::new("gpg")
+                .args(["--list-secret-keys", k])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+            checks.push(Check {
+                name: "signing".into(),
+                ok: secret_present,
+                detail: if secret_present {
+                    format!("commits sign with key {}", k)
+                } else {
+                    format!("key {} configured but no secret key available", k)
+                },
+            });
+        }
+        (Some(k), false) => checks.push(Check {
+            name: "signing".into(),
+            ok: false,
+            detail: format!("key {} configured but gpg not installed", k),
+        }),
+        (None, _) => checks.push(Check {
+            name: "signing".into(),
+            ok: true,
+            detail: "no signing key configured (commits unsigned)".into(),
+        }),
+    }
+
+    // signed tags: verify the latest tag's signature (verification only needs
+    // the public key, so it never prompts).
+    if in_repo {
+        if let Ok(tag) = git::get_latest_tag(opts) {
+            let verified = git::verify_tag(&tag, opts);
+            let key_configured = key.is_some();
+            let (ok, detail) = if verified {
+                (true, format!("latest tag '{}' has a valid signature", tag))
+            } else if key_configured {
+                (
+                    false,
+                    format!(
+                        "latest tag '{}' is unsigned/unverifiable despite a signing key",
+                        tag
+                    ),
+                )
+            } else {
+                (
+                    true,
+                    format!("latest tag '{}' is unsigned (no signing key configured)", tag),
+                )
+            };
+            checks.push(Check {
+                name: "signed-tags".into(),
+                ok,
+                detail,
+            });
+        }
+    }
+
+    // config
+    checks.push(Check {
+        name: "config".into(),
+        ok: true,
+        detail: format!(
+            "main branch '{}', linting {}",
+            config.main_branch_name,
+            if config.lint.is_some() {
+                "enabled"
+            } else {
+                "disabled"
+            }
+        ),
+    });
+
+    // Human output
+    for c in &checks {
+        let mark = if c.ok { "ok".green() } else { "FAIL".red() };
+        crate::say!("  [{}] {}: {}", mark, c.name.bold(), c.detail.dimmed());
+    }
+
+    let all_ok = checks.iter().all(|c| c.ok);
+    if all_ok {
+        crate::say!("{}", "\nEnvironment looks healthy.".green());
+    } else {
+        crate::say!("{}", "\nSome checks need attention (see above).".yellow());
+    }
+
+    report::result(Toon::obj(vec![
+        ("healthy", Toon::Bool(all_ok)),
+        (
+            "checks",
+            Toon::Arr(
+                checks
+                    .into_iter()
+                    .map(|c| {
+                        Toon::obj(vec![
+                            ("name", Toon::str(c.name)),
+                            ("ok", Toon::Bool(c.ok)),
+                            ("detail", Toon::str(c.detail)),
+                        ])
+                    })
+                    .collect(),
+            ),
+        ),
+    ]));
+
+    Ok(())
+}
+
+pub fn handle_init_command(
+    opts: RunOpts,
+    remote: Option<String>,
+    create_remote: Option<String>,
+    private: bool,
+    push: bool,
+) -> Result<()> {
+    crate::say!("--- Initialising tbdflow configuration ---");
+
+    let mut repo_initialised = false;
     if git::is_git_repository(opts).is_err() {
         let current_dir = env::current_dir()?.to_string_lossy().to_string();
-        if Confirm::with_theme(&ColorfulTheme::default())
-            .with_prompt(format!(
-                "Currently not in a git repository ({}). Would you like to initialise one?",
-                current_dir
-            ))
-            .interact()?
-        {
+        // In non-interactive mode, initialise without prompting (best practice
+        // for unborn-repository bootstrapping by an agent).
+        let do_init = opts.non_interactive
+            || Confirm::with_theme(&ColorfulTheme::default())
+                .with_prompt(format!(
+                    "Currently not in a git repository ({}). Would you like to initialise one?",
+                    current_dir
+                ))
+                .interact()?;
+        if do_init {
             git::init_git_repository(opts)?;
-            println!("{}", "New git repository initialised.".green());
+            // Best practice: name the trunk 'main' from the start. Safe because
+            // the branch is unborn (no commits to orphan).
+            let _ = git::set_head_branch("main", opts);
+            repo_initialised = true;
+            crate::say!("{}", "New git repository initialised.".green());
         } else {
-            println!("Aborted. Please run `tbdflow init` from within a git repository.");
+            crate::say!("Aborted. Please run `tbdflow init` from within a git repository.");
             return Ok(());
         }
     }
@@ -63,12 +276,12 @@ pub fn handle_init_command(opts: RunOpts) -> Result<()> {
             };
             let yaml_string = yaml_serde::to_string(&project_config)?;
             fs::write(&project_config_path, yaml_string)?;
-            println!(
+            crate::say!(
                 "{}",
                 "Created project-specific .tbdflow.yml in current directory.".green()
             );
         } else {
-            println!(
+            crate::say!(
                 "{}",
                 ".tbdflow.yml already exists in this directory. Skipping.".yellow()
             );
@@ -78,13 +291,13 @@ pub fn handle_init_command(opts: RunOpts) -> Result<()> {
             let default_config = config::Config::default();
             let yaml_string = yaml_serde::to_string(&default_config)?;
             fs::write(&tbdflow_path, yaml_string)?;
-            println!(
+            crate::say!(
                 "{}",
                 "Created default .tbdflow.yml configuration file.".green()
             );
             files_created = true;
         } else {
-            println!("{}", ".tbdflow.yml already exists. Skipping.".yellow());
+            crate::say!("{}", ".tbdflow.yml already exists. Skipping.".yellow());
         }
     }
 
@@ -100,21 +313,46 @@ checklist:
 "#
         .trim();
         fs::write(&dod_path, default_dod)?;
-        println!("{}", "Created default .dod.yml checklist file.".green());
+        crate::say!("{}", "Created default .dod.yml checklist file.".green());
         files_created = true;
     } else {
-        println!("{}", ".dod.yml already exists. Skipping.".yellow());
+        crate::say!("{}", ".dod.yml already exists. Skipping.".yellow());
     }
 
     if files_created {
-        println!(
+        crate::say!(
             "\n{}",
             "Creating initial commit for configuration files...".blue()
         );
         git::add_all(opts)?;
         git::commit("chore: Initialise tbdflow configuration", opts)?;
-        println!("{}", "Initial commit created.".green());
+        crate::say!("{}", "Initial commit created.".green());
+    }
 
+    let mut remote_linked = false;
+    let mut remote_target: Option<String> = None;
+
+    if let Some(slug) = create_remote {
+        // Create a brand-new GitHub repository and wire up origin via gh.
+        if !gh::available() {
+            return Err(anyhow::anyhow!(
+                "--create-remote needs the GitHub CLI (gh); install it from https://cli.github.com/"
+            ));
+        }
+        crate::say!(
+            "{}",
+            format!("Creating GitHub repository '{}'...", slug).blue()
+        );
+        let out = gh::create_repo(&slug, private, push, opts)?;
+        remote_linked = true;
+        remote_target = Some(slug.clone());
+        crate::say!("{}", format!("Created and linked {}", out).green());
+    } else if let Some(remote_url) = remote {
+        link_remote(&remote_url, opts)?;
+        remote_linked = true;
+        remote_target = Some(remote_url);
+    } else if files_created && !opts.non_interactive {
+        // Interactive fallback: offer to link a remote.
         if Confirm::with_theme(&ColorfulTheme::default())
             .with_prompt(
                 "\nDo you want to link a remote repository and push the initial commit now?",
@@ -124,29 +362,47 @@ checklist:
             let remote_url: String = Input::with_theme(&ColorfulTheme::default())
                 .with_prompt("Please enter the remote repository URL (e.g. from GitHub)")
                 .interact_text()?;
-
             if !remote_url.is_empty() {
-                git::add_remote("origin", &remote_url, opts)?;
-                git::fetch_origin(opts)?;
-
-                if git::remote_branch_exists("main", opts).is_ok() {
-                    println!(
-                        "{}",
-                        "Remote 'main' branch found. Reconciling histories...".yellow()
-                    );
-                    git::rebase_onto_main("main", opts)?;
-                }
-
-                git::push_set_upstream("main", opts)?;
-                println!(
-                    "{}",
-                    "Successfully linked remote and pushed initial commit.".green()
-                );
+                link_remote(&remote_url, opts)?;
+                remote_linked = true;
+                remote_target = Some(remote_url);
             } else {
-                println!("{}", "No URL provided. Skipping remote setup.".yellow());
+                crate::say!("{}", "No URL provided. Skipping remote setup.".yellow());
             }
         }
     }
+
+    let mut result = vec![
+        ("initialised".to_string(), Toon::Bool(repo_initialised)),
+        ("config_created".to_string(), Toon::Bool(files_created)),
+        ("remote_linked".to_string(), Toon::Bool(remote_linked)),
+    ];
+    if let Some(target) = remote_target {
+        result.push(("remote".to_string(), Toon::str(target)));
+    }
+    report::result(Toon::Obj(result));
+    Ok(())
+}
+
+/// Link an existing remote URL as `origin`, reconcile with any remote trunk, and
+/// push the initial commit with upstream tracking.
+fn link_remote(remote_url: &str, opts: RunOpts) -> Result<()> {
+    git::add_remote("origin", remote_url, opts)?;
+    git::fetch_origin(opts)?;
+
+    if git::remote_branch_exists("main", opts).is_ok() {
+        crate::say!(
+            "{}",
+            "Remote 'main' branch found. Reconciling histories...".yellow()
+        );
+        git::rebase_onto_main("main", opts)?;
+    }
+
+    git::push_set_upstream("main", opts)?;
+    crate::say!(
+        "{}",
+        "Successfully linked remote and pushed initial commit.".green()
+    );
     Ok(())
 }
 
@@ -163,7 +419,7 @@ pub fn handle_info(opts: RunOpts, edit: bool) -> Result<()> {
         return Ok(());
     }
 
-    println!("{}", "--- tbdflow Configuration ---".blue());
+    crate::say!("{}", "--- tbdflow Configuration ---".blue());
 
     let root_config: config::Config = if root_config_path.exists() {
         let yaml_str = fs::read_to_string(&root_config_path)?;
@@ -191,9 +447,9 @@ fn print_mode_and_settings(
     if let Some(project_root) = config::find_project_root()? {
         let project_config_path = project_root.join(".tbdflow.yml");
         if project_config_path.exists() {
-            println!("Mode: {} (Project)", "Monorepo".to_string().bold());
-            println!("Project Root: {}", project_root.to_string_lossy());
-            println!(
+            crate::say!("Mode: {} (Project)", "Monorepo".to_string().bold());
+            crate::say!("Project Root: {}", project_root.to_string_lossy());
+            crate::say!(
                 "Loaded project-specific config from: {}",
                 project_config_path.to_string_lossy()
             );
@@ -201,7 +457,7 @@ fn print_mode_and_settings(
             let project_yaml_str = fs::read_to_string(&project_config_path)?;
             let project_config: config::Config = yaml_serde::from_str(&project_yaml_str)?;
 
-            println!("\n{}", "--- Settings ---".bold());
+            crate::say!("\n{}", "--- Settings ---".bold());
 
             let main_branch_source =
                 if project_config.main_branch_name != root_config.main_branch_name {
@@ -209,7 +465,7 @@ fn print_mode_and_settings(
                 } else {
                     "(inherited from root)".dimmed()
                 };
-            println!(
+            crate::say!(
                 "Main Branch: {} {}",
                 project_config.main_branch_name, main_branch_source
             );
@@ -220,7 +476,7 @@ fn print_mode_and_settings(
                 } else {
                     "(inherited from root)".dimmed()
                 };
-            println!(
+            crate::say!(
                 "Issue Handling Strategy: {:?} {}",
                 format!("{:?}", project_config.issue_handling.strategy).cyan(),
                 issue_strategy_source
@@ -228,34 +484,34 @@ fn print_mode_and_settings(
         }
     } else {
         if root_config.monorepo.enabled && !root_config.monorepo.project_dirs.is_empty() {
-            println!("Mode: {} (Root)", "Monorepo".to_string().bold());
-            println!(
+            crate::say!("Mode: {} (Root)", "Monorepo".to_string().bold());
+            crate::say!(
                 "Loaded root config from: {}",
                 root_config_path.to_string_lossy()
             );
-            println!("Project Directories:");
+            crate::say!("Project Directories:");
             for dir in &root_config.monorepo.project_dirs {
-                println!("- {}", dir.cyan());
+                crate::say!("- {}", dir.cyan());
             }
         } else {
-            println!("Mode: {}", "Standalone".bold());
+            crate::say!("Mode: {}", "Standalone".bold());
             if root_config_path.exists() {
-                println!("Loaded config from: {}", root_config_path.to_string_lossy());
+                crate::say!("Loaded config from: {}", root_config_path.to_string_lossy());
             }
         }
 
-        println!("\n{}", "--- Settings ---".bold());
-        println!(
+        crate::say!("\n{}", "--- Settings ---".bold());
+        crate::say!(
             "Main Branch: {}",
             root_config.main_branch_name.to_string().cyan()
         );
-        println!(
+        crate::say!(
             "Issue Handling Strategy: {}",
             format!("{:?}", root_config.issue_handling.strategy).cyan(),
         );
     }
 
-    println!(
+    crate::say!(
         "Stale Branch Threshold: {} days",
         format!("{}", final_config.stale_branch_threshold_days).cyan()
     );
@@ -265,32 +521,32 @@ fn print_mode_and_settings(
     } else {
         "Disabled".red()
     };
-    println!("Commit Linting: {}", lint_status);
+    crate::say!("Commit Linting: {}", lint_status);
 
     Ok(())
 }
 
 fn print_review_config(review: &config::ReviewConfig) {
-    println!("\n{}", "--- Review ---".bold());
+    crate::say!("\n{}", "--- Review ---".bold());
     if review.enabled {
-        println!("Review: {}", "Enabled".green());
-        println!("Strategy: {}", format!("{:?}", review.strategy).cyan());
+        crate::say!("Review: {}", "Enabled".green());
+        crate::say!("Strategy: {}", format!("{:?}", review.strategy).cyan());
         if !review.default_reviewers.is_empty() {
-            println!(
+            crate::say!(
                 "Default Reviewers: {}",
                 review.default_reviewers.join(", ").cyan()
             );
         }
         if let Some(ref workflow) = review.workflow {
-            println!("Workflow: {}", workflow.cyan());
+            crate::say!("Workflow: {}", workflow.cyan());
         }
         if !review.rules.is_empty() {
-            println!(
+            crate::say!(
                 "Targeted Rules: {}",
                 format!("{}", review.rules.len()).cyan()
             );
         }
-        println!(
+        crate::say!(
             "Concern Blocks Status: {}",
             if review.concern_blocks_status {
                 "Yes".yellow()
@@ -299,16 +555,16 @@ fn print_review_config(review: &config::ReviewConfig) {
             }
         );
     } else {
-        println!("Review: {}", "Disabled".red());
+        crate::say!("Review: {}", "Disabled".red());
     }
 }
 
 fn print_radar_config(radar: &config::RadarConfig) {
-    println!("\n{}", "--- Radar ---".bold());
+    crate::say!("\n{}", "--- Radar ---".bold());
     if radar.enabled {
-        println!("Radar: {}", "Enabled".green());
-        println!("Detection Level: {}", format!("{:?}", radar.level).cyan());
-        println!(
+        crate::say!("Radar: {}", "Enabled".green());
+        crate::say!("Detection Level: {}", format!("{:?}", radar.level).cyan());
+        crate::say!(
             "On Sync: {}",
             if radar.on_sync {
                 "Yes".green()
@@ -316,49 +572,49 @@ fn print_radar_config(radar: &config::RadarConfig) {
                 "No".dimmed()
             }
         );
-        println!("On Commit: {}", format!("{:?}", radar.on_commit).cyan());
+        crate::say!("On Commit: {}", format!("{:?}", radar.on_commit).cyan());
         if !radar.ignore_patterns.is_empty() {
-            println!(
+            crate::say!(
                 "Ignore Patterns: {}",
                 radar.ignore_patterns.join(", ").dimmed()
             );
         }
     } else {
-        println!("Radar: {}", "Disabled".red());
+        crate::say!("Radar: {}", "Disabled".red());
     }
 }
 
 fn print_ci_config(ci_check: &config::CiCheckConfig) {
-    println!("\n{}", "--- CI Check ---".bold());
+    crate::say!("\n{}", "--- CI Check ---".bold());
     if ci_check.enabled {
-        println!("CI Check on Sync: {}", "Enabled".green());
+        crate::say!("CI Check on Sync: {}", "Enabled".green());
     } else {
-        println!("CI Check on Sync: {}", "Disabled".red());
+        crate::say!("CI Check on Sync: {}", "Disabled".red());
     }
 }
 
 fn print_git_info(opts: RunOpts) -> Result<()> {
-    println!("\n{}", "--- Git Info ---".bold());
+    crate::say!("\n{}", "--- Git Info ---".bold());
     if let Ok(remote_url) = git::get_remote_url(opts) {
-        println!("Remote 'origin' URL: {}", remote_url.to_string().cyan());
+        crate::say!("Remote 'origin' URL: {}", remote_url.to_string().cyan());
     } else {
-        println!("Remote 'origin' URL: Not found.");
+        crate::say!("Remote 'origin' URL: Not found.");
     }
 
     let current_branch = git::get_current_branch(opts)?;
-    println!("Current branch: {}", current_branch.to_string().cyan());
+    crate::say!("Current branch: {}", current_branch.to_string().cyan());
 
     if let Ok(latest_tag) = git::get_latest_tag(opts) {
-        println!("Latest tag: {}", latest_tag.to_string().cyan());
+        crate::say!("Latest tag: {}", latest_tag.to_string().cyan());
     } else {
-        println!("Latest tag: Not found.");
+        crate::say!("Latest tag: Not found.");
     }
 
     Ok(())
 }
 
 pub fn handle_sync(opts: RunOpts, config: &config::Config) -> Result<()> {
-    println!(
+    crate::say!(
         "{}",
         "--- Syncing with remote and showing status ---"
             .to_string()
@@ -368,7 +624,7 @@ pub fn handle_sync(opts: RunOpts, config: &config::Config) -> Result<()> {
 
     // Anti-collision pre-flight: abort if a git operation is already in progress
     if let Some(msg) = git::check_git_operation_in_progress(opts)? {
-        println!(
+        crate::say!(
             "{}",
             format!("Error: {} Please resolve it before using tbdflow.", msg).red()
         );
@@ -384,7 +640,7 @@ pub fn handle_sync(opts: RunOpts, config: &config::Config) -> Result<()> {
             "Pre-sync safety snapshot",
         )?;
         if opts.verbose {
-            println!(
+            crate::say!(
                 "{}",
                 format!(
                     "Pre-sync snapshot captured: {}",
@@ -400,38 +656,49 @@ pub fn handle_sync(opts: RunOpts, config: &config::Config) -> Result<()> {
         let ci_status = git::check_ci_status(&config.main_branch_name, opts);
         match ci_status {
             git::CiStatus::Green => {
-                println!("{}", "Pre-flight CI check: trunk is green.".green());
+                crate::say!("{}", "Pre-flight CI check: trunk is green.".green());
             }
             git::CiStatus::Failed => {
-                println!(
+                crate::say!(
                     "\n{}",
                     "The trunk is currently failing CI. Pulling now might break your local build."
                         .bold()
                         .yellow()
                 );
+                if opts.non_interactive {
+                    // Safe default for agents: do not import a broken trunk.
+                    return Err(anyhow::anyhow!(
+                        "trunk CI is failing; sync aborted. Rerun without --non-interactive to override."
+                    ));
+                }
                 let should_continue = Confirm::with_theme(&ColorfulTheme::default())
                     .with_prompt("Continue with sync?")
                     .default(false)
                     .interact()?;
                 if !should_continue {
-                    println!("{}", "Sync aborted.".yellow());
+                    crate::say!("{}", "Sync aborted.".yellow());
                     return Ok(());
                 }
             }
             git::CiStatus::Pending => {
-                println!("\n{}", "⏳ Trunk CI is still running.".bold().yellow());
-                let should_continue = Confirm::with_theme(&ColorfulTheme::default())
-                    .with_prompt("Pull anyway?")
-                    .default(false)
-                    .interact()?;
-                if !should_continue {
-                    println!("{}", "Sync aborted.".yellow());
-                    return Ok(());
+                crate::say!("\n{}", "⏳ Trunk CI is still running.".bold().yellow());
+                if opts.non_interactive {
+                    // Non-blocking for agents: warn and proceed.
+                    report::warn("trunk CI is still running; pulling anyway (--non-interactive)");
+                } else {
+                    let should_continue = Confirm::with_theme(&ColorfulTheme::default())
+                        .with_prompt("Pull anyway?")
+                        .default(false)
+                        .interact()?;
+                    if !should_continue {
+                        crate::say!("{}", "Sync aborted.".yellow());
+                        return Ok(());
+                    }
                 }
             }
             git::CiStatus::Unknown(reason) => {
                 if opts.verbose {
-                    println!(
+                    crate::say!(
                         "{} {}",
                         "Pre-flight CI check skipped:".dimmed(),
                         reason.dimmed()
@@ -443,10 +710,10 @@ pub fn handle_sync(opts: RunOpts, config: &config::Config) -> Result<()> {
     }
 
     if current_branch == config.main_branch_name {
-        println!("On main branch, pulling latest changes...");
+        crate::say!("On main branch, pulling latest changes...");
         git::pull_latest_with_rebase(opts)?;
     } else {
-        println!(
+        crate::say!(
             "On feature branch '{}', rebasing onto latest '{}'...",
             current_branch, config.main_branch_name
         );
@@ -454,31 +721,38 @@ pub fn handle_sync(opts: RunOpts, config: &config::Config) -> Result<()> {
         git::rebase_onto_main(&config.main_branch_name, opts)?;
     }
 
-    println!("\n{}", "Current status:".bold());
+    crate::say!("\n{}", "Current status:".bold());
 
     let status_output = git::get_scoped_status(config, opts)?;
 
     if status_output.is_empty() {
-        println!("{}", "Working directory is clean.".green());
+        crate::say!("{}", "Working directory is clean.".green());
     } else {
-        println!("{}", status_output.yellow());
+        crate::say!("{}", status_output.yellow());
     }
 
     let log_output = git::log_graph(opts)?;
-    println!("\n{}", "Recent activity:".bold());
-    println!("{}", log_output.cyan());
+    crate::say!("\n{}", "Recent activity:".bold());
+    crate::say!("{}", log_output.cyan());
 
     // Radar: quick overlap scan
-    if let Ok(Some(radar_summary)) = radar::quick_scan_for_sync(config, opts) {
-        println!("\n{}", radar_summary.yellow());
+    let overlap = radar::quick_scan_for_sync(config, opts).ok().flatten();
+    if let Some(ref radar_summary) = overlap {
+        crate::say!("\n{}", radar_summary.yellow());
     }
 
     check_and_warn_for_stale_branches(opts, &current_branch, config)?;
+
+    report::result(Toon::obj(vec![
+        ("branch", Toon::str(current_branch)),
+        ("clean", Toon::Bool(status_output.is_empty())),
+        ("overlap", Toon::Bool(overlap.is_some())),
+    ]));
     Ok(())
 }
 
 pub fn handle_check_branches(opts: RunOpts, config: &config::Config) -> Result<()> {
-    println!(
+    crate::say!(
         "{}",
         "--- Checking current branch and stale branches ---"
             .to_string()
@@ -501,14 +775,14 @@ pub fn check_and_warn_for_stale_branches(
     let stale_branches =
         git::get_stale_branches(opts, current_branch, config.stale_branch_threshold_days)?;
     if !stale_branches.is_empty() {
-        println!(
+        crate::say!(
             "\n{}",
             "Warning: The following branches may be stale:"
                 .bold()
                 .yellow()
         );
         for (branch, days) in stale_branches {
-            println!(
+            crate::say!(
                 "{}",
                 format!("  - {} (last commit {} days ago)", branch, days).yellow()
             );
@@ -536,14 +810,14 @@ pub fn get_branch_prefix_or_error<'a>(
 }
 
 pub fn handle_undo(sha: &str, no_push: bool, opts: RunOpts, config: &config::Config) -> Result<()> {
-    println!(
+    crate::say!(
         "{}",
         "--- Undo: The Panic Button ---".to_string().bold().red()
     );
 
     // Anti-collision pre-flight
     if let Some(msg) = git::check_git_operation_in_progress(opts)? {
-        println!(
+        crate::say!(
             "{}",
             format!("Error: {} Please resolve it before using tbdflow.", msg).red()
         );
@@ -561,7 +835,7 @@ pub fn handle_undo(sha: &str, no_push: bool, opts: RunOpts, config: &config::Con
             "Pre-undo safety snapshot",
         )?;
         if opts.verbose {
-            println!(
+            crate::say!(
                 "{}",
                 format!(
                     "Pre-undo snapshot captured: {}",
@@ -575,7 +849,7 @@ pub fn handle_undo(sha: &str, no_push: bool, opts: RunOpts, config: &config::Con
     let main_branch = &config.main_branch_name;
 
     if !git::commit_exists(sha, opts)? {
-        println!(
+        crate::say!(
             "{}",
             format!("Error: Commit '{}' does not exist in this repository.", sha).red()
         );
@@ -583,7 +857,7 @@ pub fn handle_undo(sha: &str, no_push: bool, opts: RunOpts, config: &config::Con
     }
 
     let subject = git::get_commit_subject(sha, opts)?;
-    println!(
+    crate::say!(
         "{}",
         format!("Commit to revert: {} ({})", sha, subject).yellow()
     );
@@ -591,12 +865,12 @@ pub fn handle_undo(sha: &str, no_push: bool, opts: RunOpts, config: &config::Con
     git::is_working_directory_clean(opts)?;
 
     // Sync with remote (fast-forward only to preserve commit SHAs)
-    println!("Syncing with remote before reverting...");
+    crate::say!("Syncing with remote before reverting...");
     git::checkout_main(opts, main_branch)?;
     git::pull_fast_forward_only(opts)?;
 
     if !git::is_ancestor_of(sha, main_branch, opts)? {
-        println!(
+        crate::say!(
             "{}",
             format!(
                 "Error: Commit '{}' is not on the '{}' branch. Undo only works on trunk commits.",
@@ -611,18 +885,18 @@ pub fn handle_undo(sha: &str, no_push: bool, opts: RunOpts, config: &config::Con
         ));
     }
 
-    println!("{}", format!("Reverting commit {}...", sha).blue());
+    crate::say!("{}", format!("Reverting commit {}...", sha).blue());
     git::revert_commit(sha, opts)?;
 
     if no_push {
-        println!(
+        crate::say!(
             "{}",
             "Revert commit created locally (--no-push). Remember to push when ready.".yellow()
         );
     } else {
-        println!("Pushing revert to remote...");
+        crate::say!("Pushing revert to remote...");
         git::push(opts)?;
-        println!(
+        crate::say!(
             "\n{}",
             format!(
                 "Success! Commit '{}' has been reverted on '{}'.",
@@ -633,14 +907,19 @@ pub fn handle_undo(sha: &str, no_push: bool, opts: RunOpts, config: &config::Con
     }
 
     let log_output = git::log_graph(opts)?;
-    println!("\n{}", "Recent activity:".bold());
-    println!("{}", log_output.cyan());
+    crate::say!("\n{}", "Recent activity:".bold());
+    crate::say!("{}", log_output.cyan());
 
-    println!(
+    crate::say!(
         "\n{}",
         "Hint: The reverted changes are still in your git history. You can re-apply them later."
             .dimmed()
     );
+
+    report::result(Toon::obj(vec![
+        ("reverted", Toon::str(sha.to_string())),
+        ("pushed", Toon::Bool(!no_push)),
+    ]));
 
     Ok(())
 }

@@ -1,21 +1,63 @@
 use crate::commands;
 use crate::config::Config;
+use crate::report;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use colored::Colorize;
 use std::process::{Command, Stdio};
 use thiserror::Error;
 
+/// Build a `git` command with the environment agents need: a usable `GPG_TTY`
+/// so gpg/pinentry can find a controlling terminal when signing.
+fn git_command() -> Command {
+    let mut cmd = Command::new("git");
+    if let Ok(tty) = std::env::var("GPG_TTY") {
+        cmd.env("GPG_TTY", tty);
+    } else if let Ok(tty) = std::env::var("SSH_TTY") {
+        cmd.env("GPG_TTY", tty);
+    }
+    cmd
+}
+
 /// Execution options threaded through every git operation.
 #[derive(Debug, Clone, Copy)]
 pub struct RunOpts {
     pub verbose: bool,
     pub dry_run: bool,
+    /// Emit machine-readable TOON output instead of human prose.
+    pub toon: bool,
+    /// Never prompt; missing input is an error and wizards are disabled.
+    pub non_interactive: bool,
+    /// Skip GPG signing for this invocation.
+    pub no_sign: bool,
 }
 
 impl RunOpts {
     pub fn new(verbose: bool, dry_run: bool) -> Self {
-        Self { verbose, dry_run }
+        Self {
+            verbose,
+            dry_run,
+            toon: false,
+            non_interactive: false,
+            no_sign: false,
+        }
+    }
+
+    /// Full constructor used by `main` once all global flags are parsed.
+    pub fn with_flags(
+        verbose: bool,
+        dry_run: bool,
+        toon: bool,
+        non_interactive: bool,
+        no_sign: bool,
+    ) -> Self {
+        Self {
+            verbose,
+            dry_run,
+            toon,
+            non_interactive,
+            no_sign,
+        }
     }
 }
 
@@ -41,21 +83,19 @@ pub enum GitError {
 
 /// Runs a Git command with the specified subcommand and arguments.
 fn run_git_command(command: &str, args: &[&str], opts: RunOpts) -> Result<String> {
-    if opts.verbose || opts.dry_run {
-        if opts.dry_run {
-            println!(
-                "{}",
-                "[DRY RUN] Command would execute but no changes made".yellow()
-            );
-            println!("git {} {}", command, args.join(" "));
-            println!(); // Add blank line for spacing
-            return Ok(String::new());
-        } else {
-            println!("{} git {} {}", "[RUNNING] ".cyan(), command, args.join(" "));
-        }
+    let mut full: Vec<&str> = Vec::with_capacity(args.len() + 1);
+    full.push(command);
+    full.extend_from_slice(args);
+
+    if opts.dry_run {
+        report::trace_dry_run("git", &full);
+        return Ok(String::new());
+    }
+    if opts.verbose {
+        report::trace("git", &full);
     }
 
-    let output = Command::new("git")
+    let output = git_command()
         .arg(command)
         .args(args)
         .stdout(Stdio::piped())
@@ -90,14 +130,12 @@ fn run_git_status_check(
     opts: RunOpts,
 ) -> Result<std::process::ExitStatus> {
     if opts.verbose {
-        println!(
-            "{} git {} {}",
-            "[CHECKING] ".dimmed(),
-            command,
-            args.join(" ")
-        );
+        let mut full: Vec<&str> = Vec::with_capacity(args.len() + 1);
+        full.push(command);
+        full.extend_from_slice(args);
+        report::trace("git", &full);
     }
-    Command::new("git")
+    git_command()
         .arg(command)
         .args(args)
         .stdout(Stdio::null())
@@ -173,14 +211,54 @@ pub fn add_excluding_projects(project_dirs: &[String], opts: RunOpts) -> Result<
     args.extend_from_slice(&exclude_args_str);
 
     if opts.verbose {
-        println!("Excluded dirs: \n{:#?}", args);
+        crate::say!("Excluded dirs: \n{:#?}", args);
     }
 
     run_git_command("add", &args, opts)
 }
 
+/// Returns the configured commit signing key (`user.signingkey`), if any.
+pub fn signing_key(opts: RunOpts) -> Option<String> {
+    let key = run_git_command("config", &["--get", "user.signingkey"], opts).ok()?;
+    let key = key.trim();
+    if key.is_empty() {
+        None
+    } else {
+        Some(key.to_string())
+    }
+}
+
+/// Whether commits/tags should be GPG-signed for this invocation.
+///
+/// Signs automatically when a signing key is configured or `commit.gpgsign` is
+/// true, unless `--no-sign` was passed.
+pub fn should_sign(opts: RunOpts) -> bool {
+    if opts.no_sign {
+        return false;
+    }
+    // An explicit git opt-out wins, even if a signing key is configured.
+    if let Ok(v) = run_git_command("config", &["--get", "commit.gpgsign"], opts) {
+        match v.trim() {
+            "false" => return false,
+            "true" => return true,
+            _ => {}
+        }
+    }
+    signing_key(opts).is_some()
+}
+
 pub fn commit(message: &str, opts: RunOpts) -> Result<String> {
-    run_git_command("commit", &["-m", message], opts)
+    let mut args: Vec<String> = Vec::new();
+    if should_sign(opts) {
+        match signing_key(opts) {
+            Some(key) => args.push(format!("-S{}", key)),
+            None => args.push("-S".to_string()),
+        }
+    }
+    args.push("-m".to_string());
+    args.push(message.to_string());
+    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    run_git_command("commit", &arg_refs, opts)
 }
 
 pub fn push(opts: RunOpts) -> Result<String> {
@@ -284,7 +362,59 @@ pub fn create_tag(
     commit_hash: &str,
     opts: RunOpts,
 ) -> Result<String> {
-    run_git_command("tag", &["-a", tag_name, "-m", message, commit_hash], opts)
+    let mut args: Vec<String> = Vec::new();
+    if should_sign(opts) {
+        match signing_key(opts) {
+            // `-u <key>` implies a signed tag with a specific key.
+            Some(key) => {
+                args.push("-u".to_string());
+                args.push(key);
+            }
+            None => args.push("-s".to_string()),
+        }
+    } else {
+        args.push("-a".to_string());
+    }
+    args.push(tag_name.to_string());
+    args.push("-m".to_string());
+    args.push(message.to_string());
+    args.push(commit_hash.to_string());
+    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    run_git_command("tag", &arg_refs, opts)
+}
+
+/// Verify a tag's signature with `git tag -v`. Returns true only when a valid
+/// signature is present. Verification needs only the public key, so it never
+/// prompts for a passphrase (safe to call from `doctor`).
+pub fn verify_tag(tag: &str, opts: RunOpts) -> bool {
+    run_git_status_check("tag", &["-v", tag], opts)
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// True if HEAD has no commits yet (freshly `git init`-ed / unborn branch).
+pub fn is_unborn_head(opts: RunOpts) -> bool {
+    run_git_status_check("rev-parse", &["--verify", "--quiet", "HEAD"], opts)
+        .map(|s| !s.success())
+        .unwrap_or(true)
+}
+
+/// True if the current branch has a configured upstream (`@{u}` resolves).
+pub fn has_upstream(opts: RunOpts) -> bool {
+    run_git_status_check(
+        "rev-parse",
+        &["--abbrev-ref", "--symbolic-full-name", "@{u}"],
+        opts,
+    )
+    .map(|s| s.success())
+    .unwrap_or(false)
+}
+
+/// True if a remote named `origin` is configured.
+pub fn has_origin_remote(opts: RunOpts) -> bool {
+    run_git_status_check("remote", &["get-url", "origin"], opts)
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 pub fn push_set_upstream(branch_name: &str, opts: RunOpts) -> Result<String> {
@@ -338,7 +468,7 @@ pub fn get_scoped_status(config: &Config, opts: RunOpts) -> Result<String> {
             status_for_path(path_str, opts)
         }
     } else if crate::config::is_monorepo_root(config, &current_dir, &git_root) {
-        println!(
+        crate::say!(
             "{}",
             "Monorepo root detected. Showing status for root-level files only.".yellow()
         );
@@ -358,13 +488,13 @@ pub fn stage_scoped_changes(config: &Config, include_projects: bool, opts: RunOp
         && !config.monorepo.project_dirs.is_empty()
     {
         if include_projects {
-            println!(
+            crate::say!(
                 "{}",
                 "Including all project directories in commit.".yellow()
             );
             add_all(opts)?;
         } else {
-            println!(
+            crate::say!(
                 "{}",
                 "Monorepo root detected. Staging root-level files only.".yellow()
             );
@@ -401,6 +531,16 @@ pub fn get_git_root(opts: RunOpts) -> Result<String> {
 
 pub fn init_git_repository(opts: RunOpts) -> Result<String> {
     run_git_command("init", &[], opts)
+}
+
+/// Point HEAD at the given branch name. Only safe on an unborn repository (no
+/// commits), where it simply sets the default trunk name without orphaning work.
+pub fn set_head_branch(branch: &str, opts: RunOpts) -> Result<String> {
+    run_git_command(
+        "symbolic-ref",
+        &["HEAD", &format!("refs/heads/{}", branch)],
+        opts,
+    )
 }
 
 pub fn get_stale_branches(
@@ -721,34 +861,28 @@ pub enum CiStatus {
 pub fn check_ci_status(branch: &str, opts: RunOpts) -> CiStatus {
     if opts.dry_run {
         if opts.verbose {
-            println!("{}", "[DRY RUN] Would check CI status via gh CLI".yellow());
+            crate::say!("{}", "[DRY RUN] Would check CI status via gh CLI".yellow());
         }
         return CiStatus::Green;
     }
 
     // First, check if `gh` CLI is available
-    if Command::new("gh")
-        .arg("--version")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_err()
-    {
+    if !crate::gh::available() {
         return CiStatus::Unknown("gh CLI is not installed".to_string());
     }
 
     if opts.verbose {
-        println!(
+        crate::say!(
             "{} Checking CI status for branch '{}'...",
             "[PRE-FLIGHT]".cyan(),
             branch
         );
     }
 
-    // Use `gh run list` to query the status of the latest workflow run on the branch.
-    // This gives us the overall conclusion of the most recent CI run.
-    let output = Command::new("gh")
-        .args([
+    // Use `gh run list` to query the status of the latest workflow run on the
+    // branch. This gives us the overall conclusion of the most recent CI run.
+    let result = match crate::gh::run(
+        &[
             "run",
             "list",
             "--branch",
@@ -759,28 +893,17 @@ pub fn check_ci_status(branch: &str, opts: RunOpts) -> CiStatus {
             "status,conclusion",
             "--jq",
             ".[0] | .status + \"/\" + .conclusion",
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output();
-
-    let output = match output {
-        Ok(o) => o,
+        ],
+        opts,
+    ) {
+        Ok(r) => r,
         Err(e) => {
-            return CiStatus::Unknown(format!("Failed to run gh CLI: {}", e));
+            return CiStatus::Unknown(format!("gh run list failed: {}", e));
         }
     };
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        // If the command failed because there are no workflow runs, treat as unknown
-        return CiStatus::Unknown(format!("gh run list failed: {}", stderr));
-    }
-
-    let result = String::from_utf8_lossy(&output.stdout).trim().to_string();
-
     if opts.verbose {
-        println!("{} gh run status: {}", "[PRE-FLIGHT]".cyan(), result);
+        crate::say!("{} gh run status: {}", "[PRE-FLIGHT]".cyan(), result);
     }
 
     if result.is_empty() || result == "/" || result == "null/null" {

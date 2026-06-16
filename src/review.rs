@@ -4,7 +4,6 @@ use anyhow::{Context, Result};
 use colored::Colorize;
 use glob::Pattern;
 use serde_json::Value;
-use std::process::Command;
 
 fn short_hash(hash: &str) -> &str {
     &hash[..7.min(hash.len())]
@@ -26,7 +25,7 @@ pub fn should_auto_trigger_review(
         if let Ok(pattern) = Pattern::new(&rule.pattern) {
             if touched_files.iter().any(|f| pattern.matches(f)) {
                 if opts.verbose {
-                    println!(
+                    crate::say!(
                         "{} Auto-trigger: files match rule pattern '{}'",
                         "[REVIEW]".magenta(),
                         rule.pattern
@@ -50,7 +49,7 @@ pub fn trigger_review(
 ) -> Result<()> {
     if !config.review.enabled {
         if opts.verbose {
-            println!("{}", "Review system is disabled in config.".dimmed());
+            crate::say!("{}", "Review system is disabled in config.".dimmed());
         }
         return Ok(());
     }
@@ -65,7 +64,7 @@ pub fn trigger_review(
             let matched = touched_files.iter().any(|f| pattern.matches(f));
             if matched {
                 if opts.verbose {
-                    println!(
+                    crate::say!(
                         "{} File match for rule: {}",
                         "[RULE]".magenta(),
                         rule.pattern.dimmed()
@@ -90,25 +89,25 @@ pub fn trigger_review(
     final_reviewers.sort();
     final_reviewers.dedup();
 
-    println!("{}", "--- Triggering Non-blocking Review ---".blue());
+    crate::say!("{}", "--- Triggering Non-blocking Review ---".blue());
     if is_targeted {
-        println!("{} Review triggered by targeted file rules.", ">>".yellow());
+        crate::say!("{} Review triggered by targeted file rules.", ">>".yellow());
     }
 
     let short = short_hash(commit_hash);
-    println!(
+    crate::say!(
         "{} {} ({})",
         "Review requested for:".green(),
         message.bold(),
         short.dimmed()
     );
-    println!("   Author: {}", author);
+    crate::say!("   Author: {}", author);
     if !final_reviewers.is_empty() {
-        println!("   Reviewers: {}", final_reviewers.join(", "));
+        crate::say!("   Reviewers: {}", final_reviewers.join(", "));
     }
 
     if opts.dry_run {
-        println!("{}", "[DRY RUN] Would create review request".yellow());
+        crate::say!("{}", "[DRY RUN] Would create review request".yellow());
         return Ok(());
     }
 
@@ -127,7 +126,7 @@ pub fn trigger_review(
             trigger_github_workflow(config, commit_hash, message, author, &final_reviewers, opts)?;
         }
         ReviewStrategy::LogOnly => {
-            println!(
+            crate::say!(
                 "{}",
                 "Review logged (no external system integration)".dimmed()
             );
@@ -146,11 +145,11 @@ fn trigger_github_workflow(
     opts: RunOpts,
 ) -> Result<()> {
     if !is_gh_cli_available() {
-        println!(
+        crate::say!(
             "{}",
             "Warning: GitHub CLI (gh) not found. Install it to trigger workflows.".yellow()
         );
-        println!(
+        crate::say!(
             "{}",
             "Install: https://cli.github.com/ or 'brew install gh'".dimmed()
         );
@@ -166,7 +165,7 @@ fn trigger_github_workflow(
     let short = short_hash(commit_hash);
 
     if opts.verbose {
-        println!(
+        crate::say!(
             "{} Triggering workflow '{}' for commit {}",
             "[INFO]".cyan(),
             workflow_name,
@@ -177,8 +176,8 @@ fn trigger_github_workflow(
     // Build workflow inputs as JSON
     let reviewers_json = reviewers.join(",");
 
-    let output = Command::new("gh")
-        .args([
+    let output = crate::gh::output(
+        &[
             "workflow",
             "run",
             workflow_name,
@@ -190,12 +189,13 @@ fn trigger_github_workflow(
             &format!("author={}", author),
             "-f",
             &format!("reviewers={}", reviewers_json),
-        ])
-        .output()
-        .context("Failed to trigger GitHub workflow")?;
+        ],
+        opts,
+    )
+    .context("Failed to trigger GitHub workflow")?;
 
     if output.status.success() {
-        println!(
+        crate::say!(
             "{}",
             format!(
                 "Workflow '{}' triggered for commit {}",
@@ -203,18 +203,18 @@ fn trigger_github_workflow(
             )
             .green()
         );
-        println!(
+        crate::say!(
             "{}",
             "   Server-side review management is now active.".dimmed()
         );
-        println!(
+        crate::say!(
             "{}",
             "   Check GitHub Actions for issue creation and status updates.".dimmed()
         );
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
         if stderr.contains("could not find any workflows") {
-            println!(
+            crate::say!(
                 "{}",
                 format!(
                     "Warning: Workflow '{}' not found in repository.",
@@ -222,12 +222,12 @@ fn trigger_github_workflow(
                 )
                 .yellow()
             );
-            println!(
+            crate::say!(
                 "{}",
                 "   Create the workflow file at .github/workflows/ to enable server-side reviews."
                     .dimmed()
             );
-            println!(
+            crate::say!(
                 "{}",
                 "   Falling back to client-side issue creation...".dimmed()
             );
@@ -241,7 +241,7 @@ fn trigger_github_workflow(
                 opts,
             )?;
         } else {
-            println!(
+            crate::say!(
                 "{}",
                 format!("Warning: Failed to trigger workflow: {}", stderr.trim()).yellow()
             );
@@ -263,12 +263,12 @@ fn create_github_issue(
 
     // Check if gh CLI is available
     if !is_gh_cli_available() {
-        println!(
+        crate::say!(
             "{}",
             "Warning: GitHub CLI (gh) not found. Install it to enable GitHub issue creation."
                 .yellow()
         );
-        println!(
+        crate::say!(
             "{}",
             "Install: https://cli.github.com/ or 'brew install gh'".dimmed()
         );
@@ -323,7 +323,7 @@ fn create_github_issue(
     let mut args = vec!["issue", "create", "--title", &title, "--body", &body];
 
     // Add the pending label
-    if label_exists(&labels.pending) {
+    if label_exists(&labels.pending, opts) {
         args.push("--label");
         args.push(&labels.pending);
     }
@@ -336,21 +336,14 @@ fn create_github_issue(
         args.push(&assignees_str);
     }
 
-    if opts.verbose {
-        println!("{} gh {}", "[RUNNING]".cyan(), args.join(" "));
-    }
-
-    let output = Command::new("gh")
-        .args(&args)
-        .output()
-        .context("Failed to execute 'gh' CLI")?;
+    let output = crate::gh::output(&args, opts).context("Failed to execute 'gh' CLI")?;
 
     if output.status.success() {
         let issue_url = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        println!("{} {}", "Review issue created:".green(), issue_url);
+        crate::say!("{} {}", "Review issue created:".green(), issue_url);
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        println!(
+        crate::say!(
             "{}",
             format!("Warning: Failed to create GitHub issue: {}", stderr).yellow()
         );
@@ -359,29 +352,21 @@ fn create_github_issue(
     Ok(())
 }
 
-fn label_exists(label_name: &str) -> bool {
-    Command::new("gh")
-        .args(["label", "list", "--search", label_name, "--json", "name"])
-        .output()
-        .map(|o| {
-            o.status.success()
-                && String::from_utf8_lossy(&o.stdout)
-                    .contains(&format!("\"name\":\"{}\"", label_name))
-        })
-        .unwrap_or(false)
+fn label_exists(label_name: &str, opts: RunOpts) -> bool {
+    let (ok, stdout) = crate::gh::run_lenient(
+        &["label", "list", "--search", label_name, "--json", "name"],
+        opts,
+    );
+    ok && stdout.contains(&format!("\"name\":\"{}\"", label_name))
 }
 
 fn ensure_label_exists(label_name: &str, description: &str, color: &str, opts: RunOpts) {
-    if label_exists(label_name) {
+    if label_exists(label_name, opts) {
         return;
     }
 
-    if opts.verbose {
-        println!("{} Creating '{}' label...", "[INFO]".cyan(), label_name);
-    }
-
-    let result = Command::new("gh")
-        .args([
+    let (ok, _) = crate::gh::run_lenient(
+        &[
             "label",
             "create",
             label_name,
@@ -389,20 +374,14 @@ fn ensure_label_exists(label_name: &str, description: &str, color: &str, opts: R
             description,
             "--color",
             color,
-        ])
-        .output();
-
-    match result {
-        Ok(output) if output.status.success() => {
-            if opts.verbose {
-                println!("{} Created '{}' label", "[INFO]".cyan(), label_name);
-            }
-        }
-        _ => {
-            // Silently continue - label creation may fail due to permissions
-            // The issue will still be created, just without the label
-        }
+        ],
+        opts,
+    );
+    if ok && opts.verbose {
+        crate::say!("{} Created '{}' label", "[INFO]".cyan(), label_name);
     }
+    // Otherwise continue silently: label creation may fail due to permissions;
+    // the issue is still created, just without the label.
 }
 
 fn ensure_review_labels_exist(labels: &ReviewLabelsConfig, opts: RunOpts) {
@@ -433,11 +412,7 @@ fn ensure_review_labels_exist(labels: &ReviewLabelsConfig, opts: RunOpts) {
 }
 
 fn is_gh_cli_available() -> bool {
-    Command::new("gh")
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    crate::gh::available()
 }
 
 pub fn handle_review_trigger(
@@ -447,15 +422,15 @@ pub fn handle_review_trigger(
     opts: RunOpts,
 ) -> Result<()> {
     if !config.review.enabled {
-        println!(
+        crate::say!(
             "{}",
             "Review system is not enabled. Add the following to your .tbdflow.yml:".yellow()
         );
-        println!("\n  review:");
-        println!("    enabled: true");
-        println!("    strategy: github-issue");
-        println!("    default_reviewers:");
-        println!("      - teammate-username\n");
+        crate::say!("\n  review:");
+        crate::say!("    enabled: true");
+        crate::say!("    strategy: github-issue");
+        crate::say!("    default_reviewers:");
+        crate::say!("      - teammate-username\n");
         return Ok(());
     }
 
@@ -464,7 +439,7 @@ pub fn handle_review_trigger(
             // Resolve the provided SHA to a full hash
             let full = git::resolve_commit_hash(sha, opts)?;
             if opts.verbose {
-                println!(
+                crate::say!(
                     "{} Triggering review for commit {}",
                     "[REVIEW]".magenta(),
                     short_hash(&full)
@@ -488,7 +463,7 @@ pub fn handle_review_trigger(
 }
 
 pub fn handle_review_digest(config: &Config, since: &str, opts: RunOpts) -> Result<()> {
-    println!(
+    crate::say!(
         "{}",
         format!("--- Trunk Evolution Digest (Since {}) ---", since).blue()
     );
@@ -496,15 +471,15 @@ pub fn handle_review_digest(config: &Config, since: &str, opts: RunOpts) -> Resu
     let log = git::get_log_since(since, opts)?;
 
     if log.is_empty() {
-        println!(
+        crate::say!(
             "{}",
             "No new commits found in the specified time range.".yellow()
         );
         return Ok(());
     }
 
-    println!("\n{}", "COMMITS FOR REVIEW".cyan().bold());
-    println!("{}", "─".repeat(50).cyan());
+    crate::say!("\n{}", "COMMITS FOR REVIEW".cyan().bold());
+    crate::say!("{}", "─".repeat(50).cyan());
 
     for line in log.lines() {
         if line.is_empty() {
@@ -515,7 +490,7 @@ pub fn handle_review_digest(config: &Config, since: &str, opts: RunOpts) -> Resu
             let hash = short_hash(parts[0]);
             let author = parts.get(1).unwrap_or(&"unknown");
             let message = parts.get(2).unwrap_or(&"");
-            println!(
+            crate::say!(
                 "  {} {} {}",
                 hash.yellow(),
                 format!("({})", author).dimmed(),
@@ -524,10 +499,10 @@ pub fn handle_review_digest(config: &Config, since: &str, opts: RunOpts) -> Resu
         }
     }
 
-    println!("{}", "─".repeat(50).cyan());
+    crate::say!("{}", "─".repeat(50).cyan());
 
     if !config.review.default_reviewers.is_empty() {
-        println!(
+        crate::say!(
             "\n{}",
             format!(
                 "Default reviewers: {}",
@@ -537,10 +512,10 @@ pub fn handle_review_digest(config: &Config, since: &str, opts: RunOpts) -> Resu
         );
     }
 
-    println!("\n{}", "Next steps:".bold());
-    println!("   • Review commits above and discuss with the team");
-    println!("   • Run 'tbdflow review --approve <hash>' to mark as reviewed");
-    println!("   • Run 'tbdflow review --trigger' to create review issues\n");
+    crate::say!("\n{}", "Next steps:".bold());
+    crate::say!("   • Review commits above and discuss with the team");
+    crate::say!("   • Run 'tbdflow review --approve <hash>' to mark as reviewed");
+    crate::say!("   • Run 'tbdflow review --trigger' to create review issues\n");
 
     Ok(())
 }
@@ -548,10 +523,10 @@ pub fn handle_review_digest(config: &Config, since: &str, opts: RunOpts) -> Resu
 pub fn handle_review_approve(config: &Config, commit_hash: &str, opts: RunOpts) -> Result<()> {
     let short = short_hash(commit_hash);
 
-    println!("{}", format!("--- Approving Commit {} ---", short).blue());
+    crate::say!("{}", format!("--- Approving Commit {} ---", short).blue());
 
     if opts.dry_run {
-        println!("{}", "[DRY RUN] Would mark commit as approved".yellow());
+        crate::say!("{}", "[DRY RUN] Would mark commit as approved".yellow());
         return Ok(());
     }
 
@@ -563,13 +538,13 @@ pub fn handle_review_approve(config: &Config, commit_hash: &str, opts: RunOpts) 
             // For workflow strategy, close the issue which will trigger
             // the server-side Action to update commit status
             close_github_review_issue(&config.review.labels, short, opts)?;
-            println!(
+            crate::say!(
                 "{}",
                 "   Server-side workflow will update commit status.".dimmed()
             );
         }
         ReviewStrategy::LogOnly => {
-            println!("{}", format!("Commit {} marked as approved", short).green());
+            crate::say!("{}", format!("Commit {} marked as approved", short).green());
         }
     }
 
@@ -584,13 +559,13 @@ pub fn handle_review_concern(
 ) -> Result<()> {
     let short = short_hash(commit_hash);
 
-    println!(
+    crate::say!(
         "{}",
         format!("--- Raising Concern on Commit {} ---", short).blue()
     );
 
     if opts.dry_run {
-        println!("{}", "[DRY RUN] Would raise concern on commit".yellow());
+        crate::say!("{}", "[DRY RUN] Would raise concern on commit".yellow());
         return Ok(());
     }
 
@@ -599,7 +574,7 @@ pub fn handle_review_concern(
             raise_github_concern(config, commit_hash, message, opts)?;
         }
         ReviewStrategy::LogOnly => {
-            println!("{}", format!("CONCERN on {}: {}", short, message).yellow());
+            crate::say!("{}", format!("CONCERN on {}: {}", short, message).yellow());
         }
     }
 
@@ -614,13 +589,13 @@ pub fn handle_review_dismiss(
 ) -> Result<()> {
     let short = short_hash(commit_hash);
 
-    println!(
+    crate::say!(
         "{}",
         format!("--- Dismissing Review for Commit {} ---", short).blue()
     );
 
     if opts.dry_run {
-        println!("{}", "[DRY RUN] Would dismiss review".yellow());
+        crate::say!("{}", "[DRY RUN] Would dismiss review".yellow());
         return Ok(());
     }
 
@@ -629,7 +604,7 @@ pub fn handle_review_dismiss(
             dismiss_github_review_issue(&config.review.labels, short, message, opts)?;
         }
         ReviewStrategy::LogOnly => {
-            println!(
+            crate::say!(
                 "{}",
                 format!("Review for {} dismissed: {}", short, message).dimmed()
             );
@@ -649,7 +624,7 @@ fn raise_github_concern(
     let labels = &config.review.labels;
 
     if !is_gh_cli_available() {
-        println!(
+        crate::say!(
             "{}",
             "Warning: GitHub CLI (gh) not found. Cannot raise concern.".yellow()
         );
@@ -660,11 +635,11 @@ fn raise_github_concern(
     let search_query = format!("[Review] in:title {} in:title is:open", short);
 
     if opts.verbose {
-        println!("{} Searching for review issue...", "[INFO]".cyan());
+        crate::say!("{} Searching for review issue...", "[INFO]".cyan());
     }
 
-    let output = Command::new("gh")
-        .args([
+    let (ok, json_output) = crate::gh::run_lenient(
+        &[
             "issue",
             "list",
             "--search",
@@ -673,58 +648,59 @@ fn raise_github_concern(
             "number,body",
             "--limit",
             "1",
-        ])
-        .output()
-        .context("Failed to search for GitHub issues")?;
+        ],
+        opts,
+    );
 
-    if !output.status.success() {
-        println!(
+    if !ok {
+        crate::say!(
             "{}",
             format!("Warning: Could not find review issue for {}", short).yellow()
         );
         return Ok(());
     }
 
-    let json_output = String::from_utf8_lossy(&output.stdout);
-
     if let Some(issue_num) = extract_issue_number(&json_output) {
         let issue_num_str = issue_num.to_string();
 
         // Update labels: remove pending, add concern
         if opts.verbose {
-            println!(
+            crate::say!(
                 "{} Updating labels on issue #{}",
                 "[INFO]".cyan(),
                 issue_num
             );
         }
 
-        let _ = Command::new("gh")
-            .args([
+        let _ = crate::gh::run_lenient(
+            &[
                 "issue",
                 "edit",
                 &issue_num_str,
                 "--remove-label",
                 &labels.pending,
-            ])
-            .output();
+            ],
+            opts,
+        );
 
-        let _ = Command::new("gh")
-            .args([
+        let _ = crate::gh::run_lenient(
+            &[
                 "issue",
                 "edit",
                 &issue_num_str,
                 "--add-label",
                 &labels.concern,
-            ])
-            .output();
+            ],
+            opts,
+        );
 
         // Add a comment with the concern
         let comment = format!("**Concern Raised**\n\n{}", message);
 
-        let _ = Command::new("gh")
-            .args(["issue", "comment", &issue_num_str, "--body", &comment])
-            .output();
+        let _ = crate::gh::run_lenient(
+            &["issue", "comment", &issue_num_str, "--body", &comment],
+            opts,
+        );
 
         // Append checklist item to the issue body
         append_concern_checklist_item(&issue_num_str, message, opts)?;
@@ -732,7 +708,7 @@ fn raise_github_concern(
         // Set commit status based on config
         set_commit_status(config, commit_hash, message, opts)?;
 
-        println!(
+        crate::say!(
             "{}",
             format!(
                 "Concern raised on issue #{} for commit {} (label: {})",
@@ -741,11 +717,11 @@ fn raise_github_concern(
             .yellow()
         );
     } else {
-        println!(
+        crate::say!(
             "{}",
             format!("Warning: No open review issue found for commit {}", short).yellow()
         );
-        println!("   Run 'tbdflow review --trigger' first to create the review issue.");
+        crate::say!("   Run 'tbdflow review --trigger' first to create the review issue.");
     }
 
     Ok(())
@@ -757,16 +733,11 @@ fn append_concern_checklist_item(
     opts: RunOpts,
 ) -> Result<()> {
     // Get current issue body
-    let output = Command::new("gh")
-        .args(["issue", "view", issue_num, "--json", "body"])
-        .output()
-        .context("Failed to get issue body")?;
-
-    if !output.status.success() {
+    let (ok, json_output) =
+        crate::gh::run_lenient(&["issue", "view", issue_num, "--json", "body"], opts);
+    if !ok {
         return Ok(());
     }
-
-    let json_output = String::from_utf8_lossy(&output.stdout);
 
     // Extract the body content
     let current_body = extract_body_from_json(&json_output).unwrap_or_default();
@@ -792,15 +763,13 @@ fn append_concern_checklist_item(
     };
 
     if opts.verbose {
-        println!(
+        crate::say!(
             "{} Updating issue body with concern checklist item",
             "[INFO]".cyan()
         );
     }
 
-    let _ = Command::new("gh")
-        .args(["issue", "edit", issue_num, "--body", &new_body])
-        .output();
+    let _ = crate::gh::run_lenient(&["issue", "edit", issue_num, "--body", &new_body], opts);
 
     Ok(())
 }
@@ -830,24 +799,12 @@ fn set_commit_status(
     };
 
     // Get repo owner/name
-    let repo_info = Command::new("gh")
-        .args(["repo", "view", "--json", "owner,name"])
-        .output();
-
-    let repo = match repo_info {
-        Ok(output) if output.status.success() => {
-            let json = String::from_utf8_lossy(&output.stdout);
-            extract_repo_from_json(&json)
-        }
-        _ => return Ok(()),
-    };
-
-    let Some((owner, name)) = repo else {
+    let Some((owner, name)) = crate::gh::repo_owner_name(opts) else {
         return Ok(());
     };
 
     if opts.verbose {
-        println!(
+        crate::say!(
             "{} Setting commit status to '{}' for {}",
             "[INFO]".cyan(),
             state,
@@ -857,8 +814,8 @@ fn set_commit_status(
 
     let api_path = format!("repos/{}/{}/statuses/{}", owner, name, commit_hash);
 
-    let _ = Command::new("gh")
-        .args([
+    let _ = crate::gh::run_lenient(
+        &[
             "api",
             &api_path,
             "-f",
@@ -867,17 +824,11 @@ fn set_commit_status(
             "context=peer-review",
             "-f",
             &format!("description={}", description),
-        ])
-        .output();
+        ],
+        opts,
+    );
 
     Ok(())
-}
-
-fn extract_repo_from_json(json: &str) -> Option<(String, String)> {
-    let parsed: Value = serde_json::from_str(json).ok()?;
-    let owner = parsed["owner"]["login"].as_str()?.to_string();
-    let name = parsed["name"].as_str()?.to_string();
-    Some((owner, name))
 }
 
 fn dismiss_github_review_issue(
@@ -887,7 +838,7 @@ fn dismiss_github_review_issue(
     opts: RunOpts,
 ) -> Result<()> {
     if !is_gh_cli_available() {
-        println!(
+        crate::say!(
             "{}",
             "Warning: GitHub CLI (gh) not found. Cannot dismiss review.".yellow()
         );
@@ -898,11 +849,11 @@ fn dismiss_github_review_issue(
     let search_query = format!("[Review] in:title {} in:title is:open", short_hash);
 
     if opts.verbose {
-        println!("{} Searching for review issue...", "[INFO]".cyan());
+        crate::say!("{} Searching for review issue...", "[INFO]".cyan());
     }
 
-    let output = Command::new("gh")
-        .args([
+    let (ok, json_output) = crate::gh::run_lenient(
+        &[
             "issue",
             "list",
             "--search",
@@ -911,54 +862,55 @@ fn dismiss_github_review_issue(
             "number",
             "--limit",
             "1",
-        ])
-        .output()
-        .context("Failed to search for GitHub issues")?;
+        ],
+        opts,
+    );
 
-    if output.status.success() {
-        let json_output = String::from_utf8_lossy(&output.stdout);
-
+    if ok {
         if let Some(issue_num) = extract_issue_number(&json_output) {
             let issue_num_str = issue_num.to_string();
 
             // Update labels: remove pending/concern, add dismissed
             if opts.verbose {
-                println!(
+                crate::say!(
                     "{} Updating labels on issue #{}",
                     "[INFO]".cyan(),
                     issue_num
                 );
             }
 
-            let _ = Command::new("gh")
-                .args([
+            let _ = crate::gh::run_lenient(
+                &[
                     "issue",
                     "edit",
                     &issue_num_str,
                     "--remove-label",
                     &labels.pending,
-                ])
-                .output();
+                ],
+                opts,
+            );
 
-            let _ = Command::new("gh")
-                .args([
+            let _ = crate::gh::run_lenient(
+                &[
                     "issue",
                     "edit",
                     &issue_num_str,
                     "--remove-label",
                     &labels.concern,
-                ])
-                .output();
+                ],
+                opts,
+            );
 
-            let _ = Command::new("gh")
-                .args([
+            let _ = crate::gh::run_lenient(
+                &[
                     "issue",
                     "edit",
                     &issue_num_str,
                     "--add-label",
                     &labels.dismissed,
-                ])
-                .output();
+                ],
+                opts,
+            );
 
             // Close with a comment
             let comment = format!(
@@ -966,13 +918,13 @@ fn dismiss_github_review_issue(
                 message
             );
 
-            let close_output = Command::new("gh")
-                .args(["issue", "close", &issue_num_str, "--comment", &comment])
-                .output()
-                .context("Failed to close GitHub issue")?;
+            let (close_ok, _) = crate::gh::run_lenient(
+                &["issue", "close", &issue_num_str, "--comment", &comment],
+                opts,
+            );
 
-            if close_output.status.success() {
-                println!(
+            if close_ok {
+                crate::say!(
                     "{}",
                     format!(
                         "Review for commit {} dismissed and issue #{} closed (label: {})",
@@ -981,13 +933,13 @@ fn dismiss_github_review_issue(
                     .dimmed()
                 );
             } else {
-                println!(
+                crate::say!(
                     "{}",
                     "Review dismissed (issue close failed)".to_string().yellow()
                 );
             }
         } else {
-            println!(
+            crate::say!(
                 "{}",
                 format!(
                     "Review for {} dismissed (no open review issue found)",
@@ -997,7 +949,7 @@ fn dismiss_github_review_issue(
             );
         }
     } else {
-        println!(
+        crate::say!(
             "{}",
             format!("Review for {} dismissed", short_hash).dimmed()
         );
@@ -1012,11 +964,11 @@ fn close_github_review_issue(
     opts: RunOpts,
 ) -> Result<()> {
     if !is_gh_cli_available() {
-        println!(
+        crate::say!(
             "{}",
             "Warning: GitHub CLI (gh) not found. Marking as approved locally only.".yellow()
         );
-        println!("{}", format!("Commit {} approved", short_hash).green());
+        crate::say!("{}", format!("Commit {} approved", short_hash).green());
         return Ok(());
     }
 
@@ -1024,11 +976,11 @@ fn close_github_review_issue(
     let search_query = format!("[Review] in:title {} in:title is:open", short_hash);
 
     if opts.verbose {
-        println!("{} Searching for review issue...", "[INFO]".cyan());
+        crate::say!("{} Searching for review issue...", "[INFO]".cyan());
     }
 
-    let output = Command::new("gh")
-        .args([
+    let (ok, json_output) = crate::gh::run_lenient(
+        &[
             "issue",
             "list",
             "--search",
@@ -1037,73 +989,74 @@ fn close_github_review_issue(
             "number",
             "--limit",
             "1",
-        ])
-        .output()
-        .context("Failed to search for GitHub issues")?;
+        ],
+        opts,
+    );
 
-    if output.status.success() {
-        let json_output = String::from_utf8_lossy(&output.stdout);
-
+    if ok {
         // Simple JSON parsing for issue number
         if let Some(issue_num) = extract_issue_number(&json_output) {
             let issue_num_str = issue_num.to_string();
 
             // Remove pending/concern labels and add accepted label
             if opts.verbose {
-                println!(
+                crate::say!(
                     "{} Updating labels on issue #{}",
                     "[INFO]".cyan(),
                     issue_num
                 );
             }
 
-            let _ = Command::new("gh")
-                .args([
+            let _ = crate::gh::run_lenient(
+                &[
                     "issue",
                     "edit",
                     &issue_num_str,
                     "--remove-label",
                     &labels.pending,
-                ])
-                .output();
+                ],
+                opts,
+            );
 
-            let _ = Command::new("gh")
-                .args([
+            let _ = crate::gh::run_lenient(
+                &[
                     "issue",
                     "edit",
                     &issue_num_str,
                     "--remove-label",
                     &labels.concern,
-                ])
-                .output();
+                ],
+                opts,
+            );
 
-            let _ = Command::new("gh")
-                .args([
+            let _ = crate::gh::run_lenient(
+                &[
                     "issue",
                     "edit",
                     &issue_num_str,
                     "--add-label",
                     &labels.accepted,
-                ])
-                .output();
+                ],
+                opts,
+            );
 
             if opts.verbose {
-                println!("{} Closing issue #{}", "[INFO]".cyan(), issue_num);
+                crate::say!("{} Closing issue #{}", "[INFO]".cyan(), issue_num);
             }
 
-            let close_output = Command::new("gh")
-                .args([
+            let (close_ok, _) = crate::gh::run_lenient(
+                &[
                     "issue",
                     "close",
                     &issue_num_str,
                     "--comment",
                     "Approved via `tbdflow review --approve`",
-                ])
-                .output()
-                .context("Failed to close GitHub issue")?;
+                ],
+                opts,
+            );
 
-            if close_output.status.success() {
-                println!(
+            if close_ok {
+                crate::say!(
                     "{}",
                     format!(
                         "Commit {} approved and review issue #{} closed (label: {})",
@@ -1112,13 +1065,13 @@ fn close_github_review_issue(
                     .green()
                 );
             } else {
-                println!(
+                crate::say!(
                     "{}",
                     format!("Commit {} approved (issue close failed)", short_hash).yellow()
                 );
             }
         } else {
-            println!(
+            crate::say!(
                 "{}",
                 format!(
                     "Commit {} approved (no open review issue found)",
@@ -1128,7 +1081,7 @@ fn close_github_review_issue(
             );
         }
     } else {
-        println!("{}", format!("Commit {} approved", short_hash).green());
+        crate::say!("{}", format!("Commit {} approved", short_hash).green());
     }
 
     Ok(())

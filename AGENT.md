@@ -102,9 +102,23 @@ You MUST:
 
 ---
 
+## Non-Interactive & Machine Output
+
+When you drive `tbdflow` programmatically, always pass these global flags before the
+subcommand:
+
+* `--non-interactive` — never prompt; missing required input becomes a clear error.
+* `--toon` — emit a single machine-readable TOON document (`command`, `ok`, `result`,
+  `warnings`, `error`); add `--verbose` for the git/gh `trace[]`.
+* `--no-sign` — skip GPG signing for one call (signing is otherwise automatic).
+
+Parse the TOON `ok`/`error` fields; on failure, correct the inputs — never fall back to raw Git.
+
 ## Default Pre-Flight Behaviour
 
 Before starting any work, you must:
+
+0. **Run `tbdflow --toon doctor`** and surface any failing checks (git, gh auth, gpg, config).
 
 1. **Verify `tbdflow` is installed**
    ```bash

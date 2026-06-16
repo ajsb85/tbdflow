@@ -18,12 +18,73 @@ pub struct Cli {
     /// Simulate the command without making any changes.
     #[arg(long)]
     pub dry_run: bool,
+    /// Emit machine-readable TOON output instead of human prose.
+    /// Combine with --verbose to capture the git/gh command trace.
+    #[arg(long)]
+    pub toon: bool,
+    /// Never prompt. Missing required input becomes an error and interactive
+    /// wizards/checklists are disabled. Intended for AI agents and CI.
+    #[arg(long)]
+    pub non_interactive: bool,
+    /// Do not GPG-sign this commit/tag even if a signing key is configured.
+    #[arg(long)]
+    pub no_sign: bool,
+}
+
+impl Commands {
+    /// A short, stable name for the active command (used in TOON output).
+    pub fn name(&self) -> &'static str {
+        match self {
+            Commands::Init { .. } => "init",
+            Commands::Info { .. } => "info",
+            Commands::Update => "update",
+            Commands::Commit { .. } => "commit",
+            Commands::Branch { .. } => "branch",
+            Commands::Complete { .. } => "complete",
+            Commands::Sync => "sync",
+            Commands::Radar => "radar",
+            Commands::Status => "status",
+            Commands::CurrentBranch => "current-branch",
+            Commands::CheckBranches => "check-branches",
+            Commands::GenerateManPage => "generate-man-page",
+            Commands::Completion { .. } => "completion",
+            Commands::Changelog { .. } => "changelog",
+            Commands::Config { .. } => "config",
+            Commands::HeadSha => "head-sha",
+            Commands::Undo { .. } => "undo",
+            Commands::Note { .. } => "note",
+            Commands::Task(_) => "task",
+            Commands::Recover { .. } => "recover",
+            Commands::Review { .. } => "review",
+            Commands::Doctor => "doctor",
+        }
+    }
 }
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     /// Initialises the repository for Trunk-Based Development.
-    Init,
+    /// Works on an unborn repository: it can `git init`, create the config
+    /// files and initial commit, and optionally create/link a remote.
+    #[command(after_help = "EXAMPLES:\n  \
+    tbdflow init                                   # interactive setup\n  \
+    tbdflow --non-interactive init                 # local-only, no prompts\n  \
+    tbdflow --non-interactive init --remote git@github.com:me/app.git\n  \
+    tbdflow --non-interactive init --create-remote me/app --private --push")]
+    Init {
+        /// Remote URL to link as 'origin' and push the initial commit to.
+        #[arg(long)]
+        remote: Option<String>,
+        /// Create a new GitHub repository (OWNER/NAME) via the gh CLI and link it.
+        #[arg(long, conflicts_with = "remote")]
+        create_remote: Option<String>,
+        /// Make the created GitHub repository private (with --create-remote).
+        #[arg(long, default_value_t = false)]
+        private: bool,
+        /// Push the initial commit to the newly created/linked remote.
+        #[arg(long, default_value_t = false)]
+        push: bool,
+    },
     /// Shows the current tbdflow configuration.
     #[command(alias = "show")]
     Info {
@@ -304,6 +365,17 @@ pub enum Commands {
         #[arg(long, value_delimiter = ',')]
         reviewers: Option<Vec<String>>,
     },
+    /// Checks the environment: git, gh (installed + authenticated), gpg signing,
+    /// and the tbdflow configuration. Honours --toon for machine output.
+    #[command(
+        name = "doctor",
+        after_help = "PRE-FLIGHT FOR AGENTS AND HUMANS:\n  \
+    Run this first to confirm tbdflow can do its job in this environment.\n\n\
+    EXAMPLES:\n  \
+    tbdflow doctor                         # human-readable report\n  \
+    tbdflow --toon doctor                  # machine-readable TOON report"
+    )]
+    Doctor,
 }
 
 /// Sub-actions for the `tbdflow task` command.

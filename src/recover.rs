@@ -47,7 +47,7 @@ pub fn handle_recover_list(git_root: &Path, current_branch: &str) -> Result<()> 
     let (log, entries) = collect_snapshots(git_root)?;
 
     if entries.is_empty() {
-        println!(
+        crate::say!(
             "{}",
             "No snapshots available. Snapshots are created automatically when you use 'tbdflow n' or 'tbdflow sync'."
                 .dimmed()
@@ -63,13 +63,13 @@ pub fn handle_recover_list(git_root: &Path, current_branch: &str) -> Result<()> 
     {
         if log_branch != current_branch {
             intent::warn_stale(log_branch, current_branch);
-            println!();
+            crate::say!("");
         }
     }
 
-    println!("{}", "Available WIP snapshots:".blue().bold());
-    println!("  {:<5} {:<22} {:<42} {}", "#", "Timestamp", "Note", "Hash");
-    println!("  {}", "-".repeat(85));
+    crate::say!("{}", "Available WIP snapshots:".blue().bold());
+    crate::say!("  {:<5} {:<22} {:<42} {}", "#", "Timestamp", "Note", "Hash");
+    crate::say!("  {}", "-".repeat(85));
 
     for entry in &entries {
         let ts_display = if entry.timestamp.len() >= 19 {
@@ -83,13 +83,13 @@ pub fn handle_recover_list(git_root: &Path, current_branch: &str) -> Result<()> 
         } else {
             &entry.hash
         };
-        println!(
+        crate::say!(
             "  {:<5} {:<22} {:<42} {}",
             entry.index, ts_display, note_display, short_hash,
         );
     }
 
-    println!(
+    crate::say!(
         "\n{}",
         "Use 'tbdflow recover <index>' to restore a snapshot.".dimmed()
     );
@@ -110,7 +110,7 @@ pub fn handle_recover_apply(git_root: &Path, selector: &str, opts: RunOpts) -> R
         selector.to_string()
     };
 
-    println!(
+    crate::say!(
         "{}",
         "Warning: This will apply the snapshot over your current working directory."
             .bold()
@@ -118,7 +118,7 @@ pub fn handle_recover_apply(git_root: &Path, selector: &str, opts: RunOpts) -> R
     );
 
     if opts.dry_run {
-        println!(
+        crate::say!(
             "{}",
             format!("[DRY RUN] Would run: git stash apply {}", hash).yellow()
         );
@@ -129,7 +129,7 @@ pub fn handle_recover_apply(git_root: &Path, selector: &str, opts: RunOpts) -> R
             .interact()?;
 
         if !confirmed {
-            println!("{}", "Recover aborted.".yellow());
+            crate::say!("{}", "Recover aborted.".yellow());
             return Ok(());
         }
 
@@ -138,8 +138,8 @@ pub fn handle_recover_apply(git_root: &Path, selector: &str, opts: RunOpts) -> R
         )?;
     }
 
-    println!("{}", "Snapshot applied successfully.".green());
-    println!(
+    crate::say!("{}", "Snapshot applied successfully.".green());
+    crate::say!(
         "{}",
         "The snapshot remains available for future recovery.".dimmed()
     );
