@@ -786,6 +786,81 @@ fn test_commit_message_and_body_file() {
     assert!(msg.contains("second body line"));
 }
 
+/// `init --dry-run` in a fresh directory must make NO changes (no .git, no
+/// config files) — dry-run is side-effect-free.
+#[test]
+#[serial]
+fn test_init_dry_run_makes_no_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    std::env::set_current_dir(dir.path()).unwrap();
+
+    let mut cmd = util::tbdflow_cmd();
+    cmd.arg("--non-interactive").arg("--dry-run").arg("init");
+    cmd.assert().success().stdout(contains("DRY RUN"));
+
+    assert!(!dir.path().join(".git").exists(), ".git must not be created");
+    assert!(
+        !dir.path().join(".tbdflow.yml").exists(),
+        ".tbdflow.yml must not be written in dry-run"
+    );
+    assert!(!dir.path().join(".dod.yml").exists());
+}
+
+/// `init` in a fresh directory (non-interactive) initialises the repo, writes
+/// config, and creates an initial commit on `main`.
+#[test]
+#[serial]
+fn test_init_bootstraps_new_repo() {
+    let dir = tempfile::tempdir().unwrap();
+    std::env::set_current_dir(dir.path()).unwrap();
+
+    let mut cmd = util::tbdflow_cmd();
+    cmd.arg("--non-interactive").arg("--no-sign").arg("init");
+    cmd.assert().success();
+
+    assert!(dir.path().join(".git").exists());
+    assert!(dir.path().join(".tbdflow.yml").exists());
+    let log = std::process::Command::new("git")
+        .args(["log", "--oneline"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&log.stdout).contains("initialise tbdflow"),
+        "expected an initial commit"
+    );
+}
+
+/// Re-running `init` on a repo that has config files but NO commits (an aborted
+/// setup) self-heals by creating the initial commit.
+#[test]
+#[serial]
+fn test_init_self_heals_unborn_repo_with_config() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path();
+    std::process::Command::new("git").arg("init").current_dir(p).output().unwrap();
+    for (k, v) in [("user.email", "t@t.co"), ("user.name", "T"), ("commit.gpgsign", "false")] {
+        std::process::Command::new("git").args(["config", k, v]).current_dir(p).output().unwrap();
+    }
+    // Config files present but never committed (the broken state).
+    std::fs::write(p.join(".tbdflow.yml"), "main_branch_name: main\n").unwrap();
+    std::env::set_current_dir(p).unwrap();
+
+    let mut cmd = util::tbdflow_cmd();
+    cmd.arg("--non-interactive").arg("--no-sign").arg("init");
+    cmd.assert().success();
+
+    let log = std::process::Command::new("git")
+        .args(["log", "--oneline"])
+        .current_dir(p)
+        .output()
+        .unwrap();
+    assert!(
+        !String::from_utf8_lossy(&log.stdout).trim().is_empty(),
+        "unborn repo with config should have been committed"
+    );
+}
+
 /// `generate-man-page` must work outside a git repository (it generates docs).
 #[test]
 #[serial]

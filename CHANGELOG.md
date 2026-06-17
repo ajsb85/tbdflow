@@ -1,3 +1,22 @@
+# [0.32.2](https://github.com/ajsb85/tbdflow/releases/tag/v0.32.2) (2026-06-17)
+
+### 🐛 Bug Fixes
+- **(init):** `--dry-run init` is now side-effect-free — it prints the plan and writes nothing.
+  Previously it wrote `.tbdflow.yml`/`.dod.yml` to disk (file writes weren't gated by dry-run),
+  which then made the real run skip the initial commit and leave an unborn repo.
+- **(init):** create the initial commit whenever the repo is **unborn**, not only when this run
+  wrote config files — so a half-initialised repo self-heals on re-run.
+- **(init):** auto-init is now correctly planned under `--dry-run` (read-only git state queries
+  run for real even in dry-run, so the plan matches reality); guard `--create-remote` on an
+  unborn repo.
+- **(config):** every `.tbdflow.yml` field now has a default — a partial or hand-edited config
+  no longer crashes the tool with `missing field ...`.
+
+### ⚙️ Internal
+- Add a read-only git query path that always executes, so `--dry-run` flows decide from real
+  repository state instead of empty stand-ins.
+
+
 # [0.32.1](https://github.com/ajsb85/tbdflow/releases/tag/v0.32.1) (2026-06-16)
 
 ### 🐛 Bug Fixes

@@ -240,13 +240,42 @@ pub struct LintConfig {
     pub body_line_rules: Option<BodyLineRules>,
 }
 
+fn default_main_branch_name() -> String {
+    "main".to_string()
+}
+
+fn default_stale_branch_threshold_days() -> i64 {
+    1
+}
+
+fn default_branch_types() -> HashMap<String, String> {
+    let mut m = HashMap::new();
+    for t in ["feat", "fix", "chore", "docs", "refactor", "ci"] {
+        m.insert(t.to_string(), format!("{}/", t));
+    }
+    m.insert("release".to_string(), "release_".to_string());
+    m.insert("feature".to_string(), "feature_".to_string());
+    m
+}
+
+fn default_automatic_tags() -> AutomaticTags {
+    AutomaticTags {
+        release_prefix: "v".to_string(),
+    }
+}
+
 /// Loaded from `.tbdflow.yml` at the git root, with optional per-project overrides.
+/// Every field has a default so a partial / hand-edited config never crashes the
+/// tool — missing keys fall back to the built-in defaults.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Config {
+    #[serde(default = "default_main_branch_name")]
     pub main_branch_name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub project_root: Option<String>,
+    #[serde(default)]
     pub release_url_template: Option<String>,
+    #[serde(default = "default_stale_branch_threshold_days")]
     pub stale_branch_threshold_days: i64,
     #[serde(default)]
     pub monorepo: MonorepoConfig,
@@ -258,8 +287,11 @@ pub struct Config {
     pub radar: RadarConfig,
     #[serde(default)]
     pub ci_check: CiCheckConfig,
+    #[serde(default = "default_branch_types")]
     pub branch_types: HashMap<String, String>,
+    #[serde(default = "default_automatic_tags")]
     pub automatic_tags: AutomaticTags,
+    #[serde(default)]
     pub lint: Option<LintConfig>,
 }
 

@@ -110,6 +110,31 @@ fn run_git_command(command: &str, args: &[&str], opts: RunOpts) -> Result<String
     }
 }
 
+/// Runs a **read-only** git query. Unlike [`run_git_command`], this ALWAYS
+/// executes — even under `--dry-run` — so simulated flows decide from the real
+/// repository state instead of empty stand-ins. Only use for commands with no
+/// side effects (rev-parse, status, log, config --get, …).
+fn run_git_query(command: &str, args: &[&str], opts: RunOpts) -> Result<String> {
+    if opts.verbose {
+        let mut full: Vec<&str> = Vec::with_capacity(args.len() + 1);
+        full.push(command);
+        full.extend_from_slice(args);
+        report::trace("git", &full);
+    }
+    let output = git_command()
+        .arg(command)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .with_context(|| format!("Failed to execute 'git {}'", command))?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    } else {
+        Err(GitError::Git(String::from_utf8_lossy(&output.stderr).trim().to_string()).into())
+    }
+}
+
 /// Checks if the git working directory is clean.
 pub fn is_working_directory_clean(opts: RunOpts) -> Result<()> {
     let output = run_git_command("status", &["--porcelain"], opts)?;
@@ -328,7 +353,7 @@ pub fn delete_remote_branch(branch_name: &str, opts: RunOpts) -> Result<String> 
 }
 
 pub fn get_current_branch(opts: RunOpts) -> Result<String> {
-    run_git_command("branch", &["--show-current"], opts)
+    run_git_query("branch", &["--show-current"], opts)
 }
 
 pub fn create_branch(branch_name: &str, from_point: Option<&str>, opts: RunOpts) -> Result<String> {
@@ -536,11 +561,11 @@ pub fn get_branch_log(branch: &str, main_branch: &str, opts: RunOpts) -> Result<
 }
 
 pub fn is_git_repository(opts: RunOpts) -> Result<String> {
-    run_git_command("rev-parse", &["--is-inside-work-tree"], opts)
+    run_git_query("rev-parse", &["--is-inside-work-tree"], opts)
 }
 
 pub fn get_git_root(opts: RunOpts) -> Result<String> {
-    run_git_command("rev-parse", &["--show-toplevel"], opts)
+    run_git_query("rev-parse", &["--show-toplevel"], opts)
 }
 
 pub fn init_git_repository(opts: RunOpts) -> Result<String> {

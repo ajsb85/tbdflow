@@ -359,6 +359,76 @@ fn overlap_rows(result: Option<radar::RadarResult>) -> Vec<Toon> {
     rows
 }
 
+/// The default `.dod.yml` checklist written by `init`.
+fn default_dod_yaml() -> &'static str {
+    "checklist:\n  - \"Code is clean, readable, and adheres to team coding standards.\"\n  - \"All relevant automated tests (unit, integration) pass successfully.\"\n  - \"New features or bug fixes are covered by appropriate new tests.\"\n  - \"Security implications of this change have been considered.\"\n  - \"Relevant documentation (code comments, READMEs, etc.) is updated.\"\n"
+}
+
+/// `--dry-run` for init: print the plan and make NO changes (no git init, no
+/// file writes, no gh calls). The repo/state queries it uses run for real, so
+/// the plan reflects the actual on-disk state.
+fn report_init_plan(
+    opts: RunOpts,
+    is_repo: bool,
+    remote: &Option<String>,
+    create_remote: &Option<String>,
+    private: bool,
+    push: bool,
+) -> Result<()> {
+    crate::say!(
+        "{}",
+        "[DRY RUN] No changes will be made. Planned actions:".yellow()
+    );
+
+    let base = if is_repo {
+        std::path::PathBuf::from(git::get_git_root(opts)?)
+    } else {
+        env::current_dir()?
+    };
+
+    let mut steps: Vec<String> = Vec::new();
+    if !is_repo {
+        steps.push("git init (trunk: 'main')".to_string());
+    }
+    if !base.join(".tbdflow.yml").exists() {
+        steps.push("write .tbdflow.yml".to_string());
+    }
+    if !base.join(".dod.yml").exists() {
+        steps.push("write .dod.yml".to_string());
+    }
+    if !is_repo || git::is_unborn_head(opts) {
+        steps.push("create initial commit".to_string());
+    }
+    if let Some(slug) = create_remote {
+        steps.push(format!(
+            "gh repo create {} ({})",
+            slug,
+            if private { "private" } else { "public" }
+        ));
+        if push {
+            steps.push("push initial commit to the new remote".to_string());
+        }
+    } else if let Some(url) = remote {
+        steps.push(format!("git remote add origin {} + push", url));
+    }
+
+    if steps.is_empty() {
+        crate::say!("  - (nothing to do — already initialised)");
+    }
+    for s in &steps {
+        crate::say!("  - {}", s);
+    }
+    report::result(Toon::obj(vec![
+        ("dry_run", Toon::Bool(true)),
+        ("is_repo", Toon::Bool(is_repo)),
+        (
+            "plan",
+            Toon::Arr(steps.into_iter().map(Toon::Str).collect()),
+        ),
+    ]));
+    Ok(())
+}
+
 pub fn handle_init_command(
     opts: RunOpts,
     remote: Option<String>,
@@ -368,11 +438,19 @@ pub fn handle_init_command(
 ) -> Result<()> {
     crate::say!("--- Initialising tbdflow configuration ---");
 
+    // Real read-only check (runs even under --dry-run).
+    let is_repo = git::is_git_repository(opts).is_ok();
+
+    // --dry-run is side-effect-free: report the plan and stop. (Previously the
+    // file writes here ran during dry-run and corrupted the subsequent real run.)
+    if opts.dry_run {
+        return report_init_plan(opts, is_repo, &remote, &create_remote, private, push);
+    }
+
+    // 1. Ensure a git repository (auto-init under --non-interactive).
     let mut repo_initialised = false;
-    if git::is_git_repository(opts).is_err() {
+    if !is_repo {
         let current_dir = env::current_dir()?.to_string_lossy().to_string();
-        // In non-interactive mode, initialise without prompting (best practice
-        // for unborn-repository bootstrapping by an agent).
         let do_init = opts.non_interactive
             || Confirm::with_theme(&ColorfulTheme::default())
                 .with_prompt(format!(
@@ -380,34 +458,32 @@ pub fn handle_init_command(
                     current_dir
                 ))
                 .interact()?;
-        if do_init {
-            git::init_git_repository(opts)?;
-            // Best practice: name the trunk 'main' from the start. Safe because
-            // the branch is unborn (no commits to orphan).
-            let _ = git::set_head_branch("main", opts);
-            repo_initialised = true;
-            crate::say!("{}", "New git repository initialised.".green());
-        } else {
+        if !do_init {
             crate::say!("Aborted. Please run `tbdflow init` from within a git repository.");
             return Ok(());
         }
+        git::init_git_repository(opts)?;
+        // Name the trunk 'main' from the start (safe on an unborn branch).
+        let _ = git::set_head_branch("main", opts);
+        repo_initialised = true;
+        crate::say!("{}", "New git repository initialised.".green());
     }
 
+    // 2. Write config files (only the ones that are absent).
     let git_root = git::get_git_root(opts)?;
     let current_dir = env::current_dir()?;
-    let tbdflow_path = std::path::Path::new(&git_root).join(".tbdflow.yml");
     let mut files_created = false;
 
     if current_dir.as_path() != std::path::Path::new(&git_root) {
-        // We are in a subdirectory, create a project-specific config.
+        // In a subdirectory: create a project-specific config.
         let project_config_path = current_dir.join(".tbdflow.yml");
         if !project_config_path.exists() {
             let project_config = config::Config {
                 project_root: Some(".".to_string()),
                 ..Default::default()
             };
-            let yaml_string = yaml_serde::to_string(&project_config)?;
-            fs::write(&project_config_path, yaml_string)?;
+            fs::write(&project_config_path, yaml_serde::to_string(&project_config)?)?;
+            files_created = true;
             crate::say!(
                 "{}",
                 "Created project-specific .tbdflow.yml in current directory.".green()
@@ -419,15 +495,14 @@ pub fn handle_init_command(
             );
         }
     } else {
+        let tbdflow_path = std::path::Path::new(&git_root).join(".tbdflow.yml");
         if !tbdflow_path.exists() {
-            let default_config = config::Config::default();
-            let yaml_string = yaml_serde::to_string(&default_config)?;
-            fs::write(&tbdflow_path, yaml_string)?;
+            fs::write(&tbdflow_path, yaml_serde::to_string(&config::Config::default())?)?;
+            files_created = true;
             crate::say!(
                 "{}",
                 "Created default .tbdflow.yml configuration file.".green()
             );
-            files_created = true;
         } else {
             crate::say!("{}", ".tbdflow.yml already exists. Skipping.".yellow());
         }
@@ -435,40 +510,45 @@ pub fn handle_init_command(
 
     let dod_path = std::path::Path::new(&git_root).join(".dod.yml");
     if !dod_path.exists() {
-        let default_dod = r#"
-checklist:
-  - "Code is clean, readable, and adheres to team coding standards."
-  - "All relevant automated tests (unit, integration) pass successfully."
-  - "New features or bug fixes are covered by appropriate new tests."
-  - "Security implications of this change have been considered."
-  - "Relevant documentation (code comments, READMEs, etc.) is updated."
-"#
-        .trim();
-        fs::write(&dod_path, default_dod)?;
-        crate::say!("{}", "Created default .dod.yml checklist file.".green());
+        fs::write(&dod_path, default_dod_yaml())?;
         files_created = true;
+        crate::say!("{}", "Created default .dod.yml checklist file.".green());
     } else {
         crate::say!("{}", ".dod.yml already exists. Skipping.".yellow());
     }
 
-    if files_created {
-        crate::say!(
-            "\n{}",
-            "Creating initial commit for configuration files...".blue()
-        );
+    // 3. Initial commit — make one whenever the repo is unborn (this self-heals
+    //    a repo that has config files but no commits, e.g. after an aborted
+    //    setup), or when we just created config files in an existing repo.
+    let unborn = git::is_unborn_head(opts);
+    let mut made_commit = false;
+    if files_created || unborn {
+        crate::say!("\n{}", "Creating initial commit...".blue());
         git::add_all(opts)?;
-        git::commit("chore: Initialise tbdflow configuration", opts)?;
-        crate::say!("{}", "Initial commit created.".green());
+        if git::has_staged_changes(opts)? {
+            git::commit("chore: initialise tbdflow configuration", opts)?;
+            made_commit = true;
+            crate::say!("{}", "Initial commit created.".green());
+        } else if unborn {
+            report::warn(
+                "repository is unborn with nothing to commit — add files, then run 'tbdflow commit'",
+            );
+        }
     }
 
+    // 4. Remote linking.
     let mut remote_linked = false;
     let mut remote_target: Option<String> = None;
 
     if let Some(slug) = create_remote {
-        // Create a brand-new GitHub repository and wire up origin via gh.
         if !gh::available() {
             return Err(anyhow::anyhow!(
                 "--create-remote needs the GitHub CLI (gh); install it from https://cli.github.com/"
+            ));
+        }
+        if git::is_unborn_head(opts) {
+            return Err(anyhow::anyhow!(
+                "cannot create a remote for an unborn repository; commit something first"
             ));
         }
         crate::say!(
@@ -483,7 +563,7 @@ checklist:
         link_remote(&remote_url, opts)?;
         remote_linked = true;
         remote_target = Some(remote_url);
-    } else if files_created && !opts.non_interactive {
+    } else if made_commit && !opts.non_interactive {
         // Interactive fallback: offer to link a remote.
         if Confirm::with_theme(&ColorfulTheme::default())
             .with_prompt(
@@ -507,6 +587,7 @@ checklist:
     let mut result = vec![
         ("initialised".to_string(), Toon::Bool(repo_initialised)),
         ("config_created".to_string(), Toon::Bool(files_created)),
+        ("committed".to_string(), Toon::Bool(made_commit)),
         ("remote_linked".to_string(), Toon::Bool(remote_linked)),
     ];
     if let Some(target) = remote_target {
